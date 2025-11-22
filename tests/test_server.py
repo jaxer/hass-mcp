@@ -57,6 +57,7 @@ class TestMCPServer:
             "entity_action",
             "domain_summary_tool",  # Domain summaries tool
             "call_service_tool",
+            "reload_ha",
             "restart_ha",
             "list_automations",
             "list_labels_tool",
@@ -155,6 +156,7 @@ class TestMCPServer:
             "entity_action",
             "domain_summary_tool",
             "call_service_tool",
+            "reload_ha",
             "restart_ha",
             "list_automations",
             "search_entities_tool", 

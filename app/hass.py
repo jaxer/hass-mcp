@@ -520,6 +520,11 @@ async def restart_home_assistant() -> Dict[str, Any]:
     return await call_service("homeassistant", "restart", {})
 
 @handle_api_errors
+async def reload_home_assistant() -> Dict[str, Any]:
+    """Reload Home Assistant core configuration without a full restart"""
+    return await call_service("homeassistant", "reload_core_config", {})
+
+@handle_api_errors
 async def get_hass_error_log() -> Dict[str, Any]:
     """
     Get the Home Assistant error log for troubleshooting

@@ -45,7 +45,7 @@ def _format_list_response(
 
 from app.hass import (
     get_hass_version, get_entity_state, call_service, get_entities,
-    get_automations, restart_home_assistant, 
+    get_automations, restart_home_assistant, reload_home_assistant,
     cleanup_client, filter_fields, summarize_domain, get_system_overview,
     get_hass_error_log, get_entity_history, list_labels, create_label,
     update_label, delete_label, update_entity_labels
@@ -1020,6 +1020,15 @@ async def restart_ha() -> Dict[str, Any]:
     """
     logger.info("Restarting Home Assistant")
     return await restart_home_assistant()
+
+@mcp.tool()
+@async_handler("reload_ha")
+async def reload_ha() -> Dict[str, Any]:
+    """
+    Reload Home Assistant core configuration without a full restart
+    """
+    logger.info("Reloading Home Assistant core configuration")
+    return await reload_home_assistant()
 
 @mcp.tool()
 @async_handler("call_service")

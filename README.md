@@ -180,6 +180,7 @@ Hass-MCP provides several tools for interacting with Home Assistant:
 - `domain_summary_tool`: Get a summary of a domain's entities
 - `list_automations`: Get a list of all automations
 - `call_service_tool`: Call any Home Assistant service
+- `reload_ha`: Reload Home Assistant core configuration without restarting
 - `restart_ha`: Restart Home Assistant
 - `get_history`: Get the state history of an entity
 - `get_error_log`: Get the Home Assistant error log

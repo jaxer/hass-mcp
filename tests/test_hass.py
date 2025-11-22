@@ -7,7 +7,8 @@ from typing import Dict, List, Any
 
 from app.hass import (
     get_entity_state, call_service, get_entities, get_automations, handle_api_errors,
-    list_labels, create_label, update_label, delete_label, update_entity_labels
+    list_labels, create_label, update_label, delete_label, update_entity_labels,
+    reload_home_assistant
 )
 
 class TestHassAPI:
@@ -112,6 +113,18 @@ class TestHassAPI:
                         called_data = mock_client.post.call_args[1].get('json')
                         assert called_url == f"{mock_config['hass_url']}/api/services/{domain}/{service}"
                         assert called_data == data
+
+    @pytest.mark.asyncio
+    async def test_reload_home_assistant(self, mock_config):
+        """Reload helper should call the right Home Assistant service."""
+        mock_result = {"status": "ok"}
+
+        with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+            with patch('app.hass.call_service', AsyncMock(return_value=mock_result)) as mock_call:
+                result = await reload_home_assistant()
+
+                assert result == mock_result
+                mock_call.assert_awaited_once_with("homeassistant", "reload_core_config", {})
 
     @pytest.mark.asyncio
     async def test_get_automations(self, mock_config):
