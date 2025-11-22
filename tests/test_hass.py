@@ -5,7 +5,10 @@ import json
 import httpx
 from typing import Dict, List, Any
 
-from app.hass import get_entity_state, call_service, get_entities, get_automations, handle_api_errors
+from app.hass import (
+    get_entity_state, call_service, get_entities, get_automations, handle_api_errors,
+    list_labels, create_label, update_label, delete_label, update_entity_labels
+)
 
 class TestHassAPI:
     """Test the Home Assistant API functions."""
@@ -235,3 +238,85 @@ class TestHassAPI:
         # Verify that both functions have a docstring
         assert test_dict_function.__doc__ == "Test function that returns a dict."
         assert test_str_function.__doc__ == "Test function that returns a string."
+
+    @pytest.mark.asyncio
+    async def test_list_labels(self, mock_config):
+        """Ensure list_labels triggers the websocket registry command."""
+        mock_labels = [{"label_id": "abc", "name": "Lighting"}]
+        ws_mock = AsyncMock(return_value=mock_labels)
+
+        with patch('app.hass._call_ws_command', ws_mock):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    labels = await list_labels()
+                    assert labels == mock_labels
+                    ws_mock.assert_awaited_once_with("config/label_registry/list")
+
+    @pytest.mark.asyncio
+    async def test_create_label(self, mock_config):
+        """Ensure create_label sends the websocket payload with optional fields."""
+        mock_result = {"label_id": "abc", "name": "Lighting"}
+        ws_mock = AsyncMock(return_value=mock_result)
+
+        with patch('app.hass._call_ws_command', ws_mock):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    result = await create_label("Lighting", icon="mdi:lightbulb", color="#FFEE00")
+                    assert result == mock_result
+                    ws_mock.assert_awaited_once_with(
+                        "config/label_registry/create",
+                        {"name": "Lighting", "icon": "mdi:lightbulb", "color": "#FFEE00"}
+                    )
+
+    @pytest.mark.asyncio
+    async def test_update_label(self, mock_config):
+        """Ensure update_label sends only provided fields via websocket and enforces validation."""
+        mock_result = {"label_id": "abc", "name": "Updated"}
+        ws_mock = AsyncMock(return_value=mock_result)
+
+        with patch('app.hass._call_ws_command', ws_mock):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    result = await update_label("abc", name="Updated")
+                    assert result == mock_result
+                    ws_mock.assert_awaited_once_with(
+                        "config/label_registry/update",
+                        {"name": "Updated", "label_id": "abc"}
+                    )
+
+        # Ensure we short-circuit when no new fields are provided
+        with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+            no_update = await update_label("abc")
+            assert "error" in no_update
+
+    @pytest.mark.asyncio
+    async def test_delete_label(self, mock_config):
+        """Ensure delete_label sends the expected websocket payload."""
+        mock_result = {"label_id": "abc", "deleted": True}
+        ws_mock = AsyncMock(return_value=mock_result)
+
+        with patch('app.hass._call_ws_command', ws_mock):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    result = await delete_label("abc")
+                    assert result == mock_result
+                    ws_mock.assert_awaited_once_with(
+                        "config/label_registry/delete",
+                        {"label_id": "abc"}
+                    )
+
+    @pytest.mark.asyncio
+    async def test_update_entity_labels(self, mock_config):
+        """Ensure entity label assignment uses the entity registry websocket command."""
+        mock_result = {"entity_id": "automation.test", "labels": ["abc"]}
+        ws_mock = AsyncMock(return_value=mock_result)
+
+        with patch('app.hass._call_ws_command', ws_mock):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    result = await update_entity_labels("automation.test", ["abc"])
+                    assert result == mock_result
+                    ws_mock.assert_awaited_once_with(
+                        "config/entity_registry/update",
+                        {"entity_id": "automation.test", "labels": ["abc"]}
+                    )

@@ -58,7 +58,12 @@ class TestMCPServer:
             "domain_summary_tool",  # Domain summaries tool
             "call_service_tool",
             "restart_ha",
-            "list_automations"
+            "list_automations",
+            "list_labels_tool",
+            "create_label_tool",
+            "update_label_tool",
+            "delete_label_tool",
+            "set_entity_labels"
         ]
         
         # Check that each expected tool function exists
@@ -95,26 +100,29 @@ class TestMCPServer:
             # Case 1: Test with 404 error response format (list with single dict with error key)
             mock_get_automations.return_value = [{"error": "HTTP error: 404 - Not Found"}]
             
-            # Should return an empty list
             result = await list_automations()
-            assert isinstance(result, list)
-            assert len(result) == 0
+            assert isinstance(result, dict)
+            assert result["count"] == 0
+            assert result["automations"] == []
+            assert "HTTP error" in result.get("error", "")
             
             # Case 2: Test with dict error response
             mock_get_automations.return_value = {"error": "HTTP error: 404 - Not Found"}
             
-            # Should return an empty list
             result = await list_automations()
-            assert isinstance(result, list)
-            assert len(result) == 0
+            assert isinstance(result, dict)
+            assert result["count"] == 0
+            assert result["automations"] == []
+            assert "HTTP error" in result.get("error", "")
             
             # Case 3: Test with unexpected error
             mock_get_automations.side_effect = Exception("Unexpected error")
             
-            # Should return an empty list and log the error
             result = await list_automations()
-            assert isinstance(result, list)
-            assert len(result) == 0
+            assert isinstance(result, dict)
+            assert result["count"] == 0
+            assert result["automations"] == []
+            assert "Unexpected error" in result.get("error", "")
             
             # Case 4: Test with successful response
             mock_automations = [
@@ -128,11 +136,11 @@ class TestMCPServer:
             mock_get_automations.side_effect = None
             mock_get_automations.return_value = mock_automations
             
-            # Should return the automations list
             result = await list_automations()
-            assert isinstance(result, list)
-            assert len(result) == 1
-            assert result[0]["id"] == "morning_lights"
+            assert isinstance(result, dict)
+            assert result["count"] == 1
+            assert result["automations"][0]["id"] == "morning_lights"
+            assert "error" not in result
             
     def test_tools_have_proper_docstrings(self):
         """Test that tool functions have proper docstrings"""
@@ -151,7 +159,12 @@ class TestMCPServer:
             "list_automations",
             "search_entities_tool", 
             "system_overview",
-            "get_error_log"
+            "get_error_log",
+            "list_labels_tool",
+            "create_label_tool",
+            "update_label_tool",
+            "delete_label_tool",
+            "set_entity_labels"
         ]
         
         # Check that each tool function has a proper docstring and exists
@@ -224,6 +237,35 @@ class TestMCPServer:
             mock_get.reset_mock()
             result = await search_entities_tool(query="light", limit=10)
             mock_get.assert_called_once_with(search_query="light", limit=10, lean=True)
+
+    @pytest.mark.asyncio
+    async def test_label_tools_delegate(self):
+        """Ensure label MCP tools call the underlying helpers."""
+        from app.server import (
+            list_labels_tool, create_label_tool, update_label_tool,
+            delete_label_tool, set_entity_labels
+        )
+        
+        with patch("app.server.list_labels", AsyncMock(return_value=[{"label_id": "abc"}])) as mock_list, \
+             patch("app.server.create_label", AsyncMock(return_value={"label_id": "abc"})) as mock_create, \
+             patch("app.server.update_label", AsyncMock(return_value={"label_id": "abc", "name": "New"})) as mock_update, \
+             patch("app.server.delete_label", AsyncMock(return_value={"status": "deleted"})) as mock_delete, \
+             patch("app.server.update_entity_labels", AsyncMock(return_value={"entity_id": "automation.test"})) as mock_set:
+            
+            assert await list_labels_tool() == {"labels": [{"label_id": "abc"}], "count": 1}
+            mock_list.assert_awaited_once()
+            
+            assert await create_label_tool("Lighting") == {"label_id": "abc"}
+            mock_create.assert_awaited_once_with(name="Lighting", icon=None, color=None)
+            
+            assert await update_label_tool("abc", name="New") == {"label_id": "abc", "name": "New"}
+            mock_update.assert_awaited_once_with(label_id="abc", name="New", icon=None, color=None)
+            
+            assert await delete_label_tool("abc") == {"status": "deleted"}
+            mock_delete.assert_awaited_once_with(label_id="abc")
+            
+            assert await set_entity_labels("automation.test", ["abc"]) == {"entity_id": "automation.test"}
+            mock_set.assert_awaited_once_with(entity_id="automation.test", labels=["abc"])
             
     @pytest.mark.asyncio
     async def test_domain_summary_tool(self):

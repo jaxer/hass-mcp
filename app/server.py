@@ -2,7 +2,7 @@ import functools
 import logging
 import json
 import httpx
-from typing import List, Dict, Any, Optional, Callable, Awaitable, TypeVar, cast
+from typing import List, Dict, Any, Optional, Callable, Awaitable, TypeVar, cast, Sequence
 
 # Set up logging
 logging.basicConfig(
@@ -14,11 +14,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def _extract_error_response(result: Any) -> Optional[Dict[str, Any]]:
+    """Return a standard error dictionary if the result represents an error."""
+    if isinstance(result, dict) and "error" in result:
+        return result
+    if (
+        isinstance(result, list)
+        and len(result) == 1
+        and isinstance(result[0], dict)
+        and "error" in result[0]
+    ):
+        return result[0]
+    return None
+
+
+def _format_list_response(
+    items: Sequence[Any],
+    *,
+    key: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Wrap list responses so MCP always gets textual content, even when empty."""
+    normalized = items if isinstance(items, list) else list(items)
+    response: Dict[str, Any] = {key: normalized, "count": len(normalized)}
+    if metadata:
+        # Drop keys with None values to keep payload tidy
+        response.update({k: v for k, v in metadata.items() if v is not None})
+    return response
+
 from app.hass import (
     get_hass_version, get_entity_state, call_service, get_entities,
     get_automations, restart_home_assistant, 
     cleanup_client, filter_fields, summarize_domain, get_system_overview,
-    get_hass_error_log, get_entity_history
+    get_hass_error_log, get_entity_history, list_labels, create_label,
+    update_label, delete_label, update_entity_labels
 )
 
 # Type variable for generic functions
@@ -234,7 +264,7 @@ async def list_entities(
     limit: int = 100,
     fields: Optional[List[str]] = None,
     detailed: bool = False
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
     Get a list of Home Assistant entities with optional filtering
     
@@ -247,7 +277,10 @@ async def list_entities(
         detailed: If True, returns all entity fields without filtering
     
     Returns:
-        A list of entity dictionaries with lean formatting by default
+        A dictionary with the matching entities and metadata:
+        - count: number of entities returned
+        - entities: the entity payloads (lean by default)
+        - domain/search_query/limit/fields/detail_level: echo of the filters used
     
     Examples:
         domain="light" - get all lights
@@ -284,12 +317,28 @@ async def list_entities(
         logger.info("Converting '*' search query to None (retrieving all entities)")
     
     # Use the updated get_entities function with field filtering
-    return await get_entities(
+    entities = await get_entities(
         domain=domain, 
         search_query=search_query, 
         limit=limit,
         fields=fields,
         lean=not detailed  # Use lean format unless detailed is requested
+    )
+
+    error = _extract_error_response(entities)
+    if error:
+        return error
+
+    return _format_list_response(
+        entities,
+        key="entities",
+        metadata={
+            "domain": domain,
+            "search_query": search_query,
+            "limit": limit,
+            "fields": fields,
+            "detail_level": "detailed" if detailed else "lean",
+        },
     )
 
 @mcp.resource("hass://entities")
@@ -826,7 +875,7 @@ async def list_states_by_domain_resource(domain: str) -> str:
 # Automation management MCP tools
 @mcp.tool()
 @async_handler("list_automations")
-async def list_automations() -> List[Dict[str, Any]]:
+async def list_automations() -> Dict[str, Any]:
     """
     Get a list of all automations from Home Assistant
     
@@ -834,8 +883,10 @@ async def list_automations() -> List[Dict[str, Any]]:
     including their IDs, entity IDs, state, and display names.
     
     Returns:
-        A list of automation dictionaries, each containing id, entity_id, 
-        state, and alias (friendly name) fields.
+        A dictionary with automation results:
+        - count: number of automations returned
+        - automations: list of automation entries
+        - error: present only when Home Assistant returned/raised an error
         
     Examples:
         Returns all automation objects with state and friendly names
@@ -845,23 +896,116 @@ async def list_automations() -> List[Dict[str, Any]]:
     try:
         # Get automations will now return data from states API, which is more reliable
         automations = await get_automations()
-        
-        # Handle error responses that might still occur
-        if isinstance(automations, dict) and "error" in automations:
-            logger.warning(f"Error getting automations: {automations['error']}")
-            return []
-            
-        # Handle case where response is a list with error
-        if isinstance(automations, list) and len(automations) == 1 and isinstance(automations[0], dict) and "error" in automations[0]:
-            logger.warning(f"Error getting automations: {automations[0]['error']}")
-            return []
-            
-        return automations
+
+        error = _extract_error_response(automations)
+        if error:
+            logger.warning(f"Error getting automations: {error['error']}")
+            return _format_list_response(
+                [],
+                key="automations",
+                metadata={"error": error.get("error")},
+            )
+
+        return _format_list_response(automations, key="automations")
     except Exception as e:
         logger.error(f"Error in list_automations: {str(e)}")
-        return []
+        return _format_list_response(
+            [],
+            key="automations",
+            metadata={"error": f"Unexpected error: {str(e)}"},
+        )
 
-# We already have a list_automations tool, so no need to duplicate functionality
+# Label management MCP tools
+@mcp.tool()
+@async_handler("list_labels")
+async def list_labels_tool() -> Dict[str, Any]:
+    """
+    List all labels that exist in the Home Assistant label registry.
+    
+    Returns:
+        A dictionary with:
+        - count: number of labels
+        - labels: label entries (id, name, icon, color, etc.)
+    """
+    logger.info("Listing Home Assistant labels")
+    labels = await list_labels()
+
+    error = _extract_error_response(labels)
+    if error:
+        return error
+
+    return _format_list_response(labels, key="labels")
+
+@mcp.tool()
+@async_handler("create_label")
+async def create_label_tool(name: str, icon: Optional[str] = None, color: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Create a new label that can be attached to entities and automations.
+    
+    Args:
+        name: Human-friendly name for the label
+        icon: Optional Material Design Icons (MDI) identifier
+        color: Optional hex color string (e.g., '#FF9800')
+    
+    Returns:
+        The created label details or an error dictionary.
+    """
+    logger.info(f"Creating label '{name}' (icon={icon}, color={color})")
+    return await create_label(name=name, icon=icon, color=color)
+
+@mcp.tool()
+@async_handler("update_label")
+async def update_label_tool(
+    label_id: str,
+    name: Optional[str] = None,
+    icon: Optional[str] = None,
+    color: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Update an existing label's name, icon, or color.
+    
+    Args:
+        label_id: The Home Assistant label identifier
+        name: Optional new name
+        icon: Optional new icon
+        color: Optional new color value
+    
+    Returns:
+        The updated label details or an error dictionary.
+    """
+    logger.info(f"Updating label '{label_id}' (name={name}, icon={icon}, color={color})")
+    return await update_label(label_id=label_id, name=name, icon=icon, color=color)
+
+@mcp.tool()
+@async_handler("delete_label")
+async def delete_label_tool(label_id: str) -> Dict[str, Any]:
+    """
+    Delete a label from the Home Assistant label registry.
+    
+    Args:
+        label_id: The label identifier returned by the registry.
+    
+    Returns:
+        API response describing the delete operation result.
+    """
+    logger.info(f"Deleting label '{label_id}'")
+    return await delete_label(label_id=label_id)
+
+@mcp.tool()
+@async_handler("set_entity_labels")
+async def set_entity_labels(entity_id: str, labels: List[str]) -> Dict[str, Any]:
+    """
+    Assign a list of labels to a Home Assistant entity (e.g., automation.light_control).
+    
+    Args:
+        entity_id: The entity registry ID to update
+        labels: List of label IDs to apply (overwrites existing labels)
+    
+    Returns:
+        The updated entity registry entry or an error dictionary.
+    """
+    logger.info(f"Setting labels for {entity_id}: {labels}")
+    return await update_entity_labels(entity_id=entity_id, labels=labels)
 
 @mcp.tool()
 @async_handler("restart_ha")

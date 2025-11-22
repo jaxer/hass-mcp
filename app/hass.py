@@ -1,14 +1,22 @@
+import json
 import httpx
 from typing import Dict, Any, Optional, List, TypeVar, Callable, Awaitable, Union, cast
 import functools
 import inspect
 import logging
 from datetime import datetime, timedelta, timezone
+from websockets.asyncio.client import connect as ws_connect
+from websockets.exceptions import WebSocketException
 
 from app.config import HA_URL, HA_TOKEN, get_ha_headers
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+
+class HomeAssistantWebSocketError(Exception):
+    """Raised when Home Assistant websocket interactions fail."""
+
 
 # Define a generic type for our API function return values
 T = TypeVar('T')
@@ -16,6 +24,7 @@ F = TypeVar('F', bound=Callable[..., Awaitable[Any]])
 
 # HTTP client
 _client: Optional[httpx.AsyncClient] = None
+_ws_message_counter = 0
 
 # Default field sets for different verbosity levels
 # Lean fields for standard requests (optimized for token efficiency)
@@ -81,6 +90,10 @@ def handle_api_errors(func: F) -> F:
             return format_error(f"HTTP error: {e.response.status_code} - {e.response.reason_phrase}")
         except httpx.RequestError as e:
             return format_error(f"Error connecting to Home Assistant: {str(e)}")
+        except WebSocketException as e:
+            return format_error(f"WebSocket error: {str(e)}")
+        except HomeAssistantWebSocketError as e:
+            return format_error(str(e))
         except Exception as e:
             return format_error(f"Unexpected error: {str(e)}")
     
@@ -102,6 +115,74 @@ async def cleanup_client() -> None:
         logger.debug("Closing HTTP client")
         await _client.aclose()
         _client = None
+
+def _build_ws_url() -> str:
+    """Translate the configured HA_URL into a websocket endpoint."""
+    base_url = HA_URL.rstrip("/")
+    if base_url.startswith("http://"):
+        return f"ws://{base_url[7:]}/api/websocket"
+    if base_url.startswith("https://"):
+        return f"wss://{base_url[8:]}/api/websocket"
+    return f"{base_url}/api/websocket"
+
+
+def _next_ws_id() -> int:
+    """Return the next websocket message id."""
+    global _ws_message_counter
+    _ws_message_counter += 1
+    return _ws_message_counter
+
+
+def _parse_ws_payload(payload: Union[str, bytes]) -> Dict[str, Any]:
+    """Decode websocket payloads that may arrive as bytes."""
+    if isinstance(payload, bytes):
+        payload = payload.decode("utf-8")
+    return json.loads(payload)
+
+
+async def _call_ws_command(command_type: str, payload: Optional[Dict[str, Any]] = None) -> Any:
+    """Send a command over the Home Assistant websocket API and return the result."""
+    ws_url = _build_ws_url()
+    message_id = _next_ws_id()
+    message = {"id": message_id, "type": command_type}
+    if payload:
+        message.update(payload)
+
+    try:
+        async with ws_connect(ws_url) as websocket:
+            greeting = _parse_ws_payload(await websocket.recv())
+
+            if greeting.get("type") == "auth_required":
+                await websocket.send(json.dumps({"type": "auth", "access_token": HA_TOKEN}))
+                auth_response = _parse_ws_payload(await websocket.recv())
+            else:
+                auth_response = greeting
+
+            if auth_response.get("type") == "auth_invalid":
+                raise HomeAssistantWebSocketError(
+                    auth_response.get("message", "Invalid Home Assistant token")
+                )
+            if auth_response.get("type") != "auth_ok":
+                raise HomeAssistantWebSocketError(
+                    f"Unexpected Home Assistant auth response: {auth_response.get('type')}"
+                )
+
+            await websocket.send(json.dumps(message))
+
+            while True:
+                response = _parse_ws_payload(await websocket.recv())
+
+                if response.get("type") != "result" or response.get("id") != message_id:
+                    continue
+
+                if response.get("success"):
+                    return response.get("result")
+
+                error_info = response.get("error") or {}
+                error_message = error_info.get("message") or str(error_info)
+                raise HomeAssistantWebSocketError(f"Home Assistant error: {error_message}")
+    except WebSocketException as exc:
+        raise HomeAssistantWebSocketError(f"WebSocket error: {exc}") from exc
 
 # Direct entity retrieval function
 async def get_all_entity_states() -> Dict[str, Dict[str, Any]]:
@@ -663,3 +744,80 @@ async def get_system_overview() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error generating system overview: {str(e)}")
         return {"error": f"Error generating system overview: {str(e)}"}
+
+@handle_api_errors
+async def list_labels() -> List[Dict[str, Any]]:
+    """
+    Retrieve all labels from the Home Assistant label registry.
+    """
+    result = await _call_ws_command("config/label_registry/list")
+    return cast(List[Dict[str, Any]], result)
+
+@handle_api_errors
+async def create_label(name: str, icon: Optional[str] = None, color: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Create a new label in the Home Assistant label registry.
+    """
+    if not name.strip():
+        return {"error": "Label name is required"}
+    
+    payload: Dict[str, Any] = {"name": name}
+    if icon:
+        payload["icon"] = icon
+    if color:
+        payload["color"] = color
+    
+    result = await _call_ws_command("config/label_registry/create", payload)
+    return cast(Dict[str, Any], result)
+
+@handle_api_errors
+async def update_label(
+    label_id: str,
+    name: Optional[str] = None,
+    icon: Optional[str] = None,
+    color: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Update an existing label's properties.
+    """
+    if not label_id:
+        return {"error": "label_id is required"}
+    
+    update_fields: Dict[str, Any] = {}
+    if name is not None:
+        update_fields["name"] = name
+    if icon is not None:
+        update_fields["icon"] = icon
+    if color is not None:
+        update_fields["color"] = color
+    
+    if not update_fields:
+        return {"error": "At least one field (name, icon, color) must be provided to update a label"}
+    
+    update_fields["label_id"] = label_id
+    
+    result = await _call_ws_command("config/label_registry/update", update_fields)
+    return cast(Dict[str, Any], result)
+
+@handle_api_errors
+async def delete_label(label_id: str) -> Dict[str, Any]:
+    """
+    Delete a label from the Home Assistant label registry.
+    """
+    if not label_id:
+        return {"error": "label_id is required"}
+    
+    result = await _call_ws_command("config/label_registry/delete", {"label_id": label_id})
+    return cast(Dict[str, Any], result)
+
+@handle_api_errors
+async def update_entity_labels(entity_id: str, labels: List[str]) -> Dict[str, Any]:
+    """
+    Assign labels to an entity via the entity registry.
+    """
+    if not entity_id:
+        return {"error": "entity_id is required"}
+    
+    payload = {"entity_id": entity_id, "labels": labels or []}
+    result = await _call_ws_command("config/entity_registry/update", payload)
+    return cast(Dict[str, Any], result)
