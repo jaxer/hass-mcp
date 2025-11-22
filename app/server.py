@@ -1051,7 +1051,13 @@ async def call_service_tool(domain: str, service: str, data: Optional[Dict[str, 
     
     """
     logger.info(f"Calling Home Assistant service: {domain}.{service} with data: {data}")
-    return await call_service(domain, service, data or {})
+    result = await call_service(domain, service, data or {})
+    
+    # Home Assistant often returns an empty list for service calls; wrap non-dict responses
+    if not isinstance(result, dict):
+        return {"response": result}
+    
+    return result
 
 # Prompt functionality
 @mcp.prompt()

@@ -49,6 +49,40 @@ DOMAIN_IMPORTANT_ATTRIBUTES = {
     "script": ["last_triggered"],
 }
 
+# Common plural -> singular domain aliases to make service calls forgiving
+SERVICE_DOMAIN_ALIASES = {
+    "automations": "automation",
+    "scripts": "script",
+    "scenes": "scene",
+    "covers": "cover",
+    "lights": "light",
+    "switches": "switch",
+    "fans": "fan",
+    "sensors": "sensor",
+    "climates": "climate",
+    "media_players": "media_player",
+}
+
+
+def _get_service_domain_fallback(domain: str) -> Optional[str]:
+    """Return a best-effort fallback domain for service calls."""
+    normalized = domain.strip().lower()
+    if not normalized:
+        return None
+    
+    # Explicit alias table first
+    alias = SERVICE_DOMAIN_ALIASES.get(normalized)
+    if alias and alias != normalized:
+        return alias
+    
+    # Generic plural stripping (covers -> cover, media_players -> media_player, etc.)
+    if normalized.endswith("s") and len(normalized) > 1:
+        candidate = normalized[:-1]
+        if candidate and candidate != normalized:
+            return candidate
+    
+    return None
+
 def handle_api_errors(func: F) -> F:
     """
     Decorator to handle common error cases for Home Assistant API calls
@@ -397,18 +431,40 @@ async def call_service(domain: str, service: str, data: Optional[Dict[str, Any]]
         data = {}
     
     client = await get_client()
-    response = await client.post(
-        f"{HA_URL}/api/services/{domain}/{service}", 
-        headers=get_ha_headers(),
-        json=data
-    )
-    response.raise_for_status()
+    
+    async def _post_service_call(domain_to_use: str) -> Dict[str, Any]:
+        response = await client.post(
+            f"{HA_URL}/api/services/{domain_to_use}/{service}",
+            headers=get_ha_headers(),
+            json=data
+        )
+        response.raise_for_status()
+        return response.json()
+
+    try:
+        result = await _post_service_call(domain)
+    except httpx.HTTPStatusError as exc:
+        fallback_domain = None
+        if exc.response is not None and exc.response.status_code == 404:
+            fallback_domain = _get_service_domain_fallback(domain)
+        
+        if fallback_domain:
+            logger.info(
+                "Service %s.%s returned 404; retrying with %s.%s",
+                domain,
+                service,
+                fallback_domain,
+                service,
+            )
+            result = await _post_service_call(fallback_domain)
+        else:
+            raise
     
     # Invalidate cache after service calls as they might change entity states
     global _entities_timestamp
     _entities_timestamp = 0
     
-    return response.json()
+    return result
 
 @handle_api_errors
 async def summarize_domain(domain: str, example_limit: int = 3) -> Dict[str, Any]:

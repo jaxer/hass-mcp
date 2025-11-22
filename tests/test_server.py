@@ -142,6 +142,16 @@ class TestMCPServer:
             assert result["count"] == 1
             assert result["automations"][0]["id"] == "morning_lights"
             assert "error" not in result
+
+    @pytest.mark.asyncio
+    async def test_call_service_tool_wraps_list_response(self):
+        """call_service_tool should wrap non-dict responses for MCP clients."""
+        from app.server import call_service_tool
+        
+        with patch("app.server.call_service", AsyncMock(return_value=[])) as mock_call:
+            result = await call_service_tool("automation", "reload")
+            mock_call.assert_awaited_once_with("automation", "reload", {})
+            assert result == {"response": []}
             
     def test_tools_have_proper_docstrings(self):
         """Test that tool functions have proper docstrings"""

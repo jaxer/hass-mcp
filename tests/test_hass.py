@@ -115,6 +115,37 @@ class TestHassAPI:
                         assert called_data == data
 
     @pytest.mark.asyncio
+    async def test_call_service_retries_plural_domains(self, mock_config, mock_get_client):
+        """Service calls should retry with a singularized domain when HA returns 404."""
+        domain = "automations"
+        service = "reload"
+        data = {}
+        
+        request = httpx.Request("POST", f"{mock_config['hass_url']}/api/services/{domain}/{service}")
+        response = httpx.Response(status_code=404, request=request)
+        http_error = httpx.HTTPStatusError("not found", request=request, response=response)
+        
+        first_response = MagicMock()
+        first_response.raise_for_status.side_effect = http_error
+        first_response.json.return_value = {}
+        
+        second_response = MagicMock()
+        second_response.raise_for_status = MagicMock()
+        second_response.json.return_value = {"status": "ok"}
+        
+        mock_get_client.post = AsyncMock(side_effect=[first_response, second_response])
+        
+        with patch('app.hass.HA_URL', mock_config["hass_url"]), patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+            result = await call_service(domain, service, data)
+        
+        assert result == {"status": "ok"}
+        assert mock_get_client.post.call_count == 2
+        first_url = mock_get_client.post.call_args_list[0][0][0]
+        second_url = mock_get_client.post.call_args_list[1][0][0]
+        assert first_url.endswith("/api/services/automations/reload")
+        assert second_url.endswith("/api/services/automation/reload")
+
+    @pytest.mark.asyncio
     async def test_reload_home_assistant(self, mock_config):
         """Reload helper should call the right Home Assistant service."""
         mock_result = {"status": "ok"}
