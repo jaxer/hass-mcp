@@ -44,11 +44,27 @@ def _format_list_response(
     return response
 
 from app.hass import (
-    get_hass_version, get_entity_state, call_service, get_entities,
-    get_automations, restart_home_assistant, reload_home_assistant,
-    cleanup_client, filter_fields, summarize_domain, get_system_overview,
-    get_hass_error_log, get_entity_history, list_labels, create_label,
-    update_label, delete_label, update_entity_labels
+    get_hass_version,
+    get_entity_state,
+    call_service,
+    get_entities,
+    get_automations,
+    restart_home_assistant,
+    reload_home_assistant,
+    cleanup_client,
+    filter_fields,
+    summarize_domain,
+    get_system_overview,
+    get_hass_error_log,
+    get_entity_history,
+    get_entity_history_range,
+    get_entity_statistics,
+    get_entity_statistics_range,
+    list_labels,
+    create_label,
+    update_label,
+    delete_label,
+    update_entity_labels,
 )
 
 # Type variable for generic functions
@@ -1284,12 +1300,28 @@ You'll help the user create optimized dashboards by:
 @async_handler("get_history")
 async def get_history(entity_id: str, hours: int = 24) -> Dict[str, Any]:
     """
-    Get the history of an entity's state changes
-    
+    Get RAW state changes for an entity (every single state change)
+
+    TOKEN LIMIT WARNING:
+    - Returns EVERY state change in the period
+    - Response size depends on sensor update frequency × time range
+    - May exceed token limits for some LLM clients
+    - Consider using get_statistics for aggregated data instead
+
+    When to use this tool:
+    - You need exact timestamps of state changes
+    - Entity changes infrequently (e.g., doors, switches)
+    - Short time periods relative to the sensor's update frequency
+
+    When NOT to use this tool:
+    - You only need trends or aggregated values → use get_statistics
+    - Long time periods for frequently-updating sensors
+    - Response might exceed token limits → use get_statistics
+
     Args:
         entity_id: The entity ID to get history for
         hours: Number of hours of history to retrieve (default: 24)
-    
+
     Returns:
         A dictionary containing:
         - entity_id: The entity ID requested
@@ -1297,14 +1329,13 @@ async def get_history(entity_id: str, hours: int = 24) -> Dict[str, Any]:
         - count: Number of state changes found
         - first_changed: Timestamp of earliest state change
         - last_changed: Timestamp of most recent state change
-        
+
     Examples:
-        entity_id="light.living_room" - get 24h history
-        entity_id="sensor.temperature", hours=168 - get 7 day history
-    Best Practices:
-        - Keep hours reasonable (24-72) for token efficiency
-        - Use for entities with discrete state changes rather than continuously changing sensors
-        - Consider the state distribution rather than every individual state    
+        entity_id="binary_sensor.front_door" - door open/close events
+        entity_id="sensor.temperature", hours=1 - one hour of temperature readings
+
+    Note: If this tool returns a token limit error, reduce the hours parameter
+    or switch to get_statistics for aggregated data.
     """
     logger.info(f"Getting history for entity: {entity_id}, hours: {hours}")
     
@@ -1362,26 +1393,328 @@ async def get_history(entity_id: str, hours: int = 24) -> Dict[str, Any]:
         }
 
 @mcp.tool()
+@async_handler("get_history_range")
+async def get_history_range(
+    entity_id: str,
+    start_time: str,
+    end_time: Optional[str] = None,
+    minimal_response: bool = True
+) -> Dict[str, Any]:
+    """
+    Get RAW state changes for a specific date/time range
+
+    TOKEN LIMIT WARNING:
+    - Returns EVERY state change in the period
+    - Response size = sensor update frequency × time range
+    - May exceed token limits for some LLM clients
+    - High risk of exceeding limits with date ranges
+
+    When to use this tool:
+    - You need exact timestamps of specific state changes
+    - Short, precise time windows
+    - Entities with infrequent state changes
+
+    When NOT to use this tool:
+    - Date ranges spanning days → use get_statistics_range
+    - Frequently-updating sensors → use get_statistics_range
+    - You only need aggregated values → use get_statistics_range
+
+    Args:
+        entity_id: The entity ID to get history for
+        start_time: Start time (ISO 8601, date only, or 'yesterday'/'today')
+        end_time: End time (optional, defaults to 'now')
+        minimal_response: Reduce response size (default: true)
+
+    Returns:
+        A dictionary containing:
+        - entity_id: The entity ID requested
+        - states: List of state objects with timestamps
+        - count: Number of state changes found
+        - start_time: Requested start time
+        - end_time: Requested or defaulted end time
+        - first_changed: Timestamp of earliest state change
+        - last_changed: Timestamp of most recent state change
+
+    Examples:
+        entity_id="sensor.temperature", start_time="2025-10-28T10:00:00Z", end_time="2025-10-28T11:00:00Z"
+        entity_id="light.living_room", start_time="yesterday", end_time="today"
+
+    Note: If you receive a token limit error, use get_statistics_range instead
+    for the same time period to get aggregated data.
+    """
+    logger.info(f"Getting history range for entity: {entity_id}, start: {start_time}, end: {end_time}")
+
+    try:
+        # Get history using the new range function
+        history_data = await get_entity_history_range(entity_id, start_time, end_time, minimal_response)
+
+        # Check for errors from the API call
+        if isinstance(history_data, dict) and "error" in history_data:
+            return {
+                "entity_id": entity_id,
+                "error": history_data["error"],
+                "states": [],
+                "count": 0,
+                "start_time": start_time,
+                "end_time": end_time or "now"
+            }
+
+        # Process the result (same as get_history)
+        states = []
+        if history_data and isinstance(history_data, list):
+            for state_list in history_data:
+                states.extend(state_list)
+
+        if not states:
+            return {
+                "entity_id": entity_id,
+                "states": [],
+                "count": 0,
+                "start_time": start_time,
+                "end_time": end_time or "now",
+                "message": "No state changes found in the specified range"
+            }
+
+        # Sort states by last_changed timestamp
+        states.sort(key=lambda x: x.get("last_changed", ""))
+
+        # Extract first and last changed timestamps
+        first_changed = states[0].get("last_changed") if states else None
+        last_changed = states[-1].get("last_changed") if states else None
+
+        return {
+            "entity_id": entity_id,
+            "states": states,
+            "count": len(states),
+            "start_time": start_time,
+            "end_time": end_time or "now",
+            "first_changed": first_changed,
+            "last_changed": last_changed
+        }
+    except ValueError as e:
+        # Handle date parsing errors
+        logger.error(f"Date parsing error for {entity_id}: {str(e)}")
+        return {
+            "entity_id": entity_id,
+            "error": str(e),
+            "states": [],
+            "count": 0,
+            "start_time": start_time,
+            "end_time": end_time or "now"
+        }
+    except Exception as e:
+        logger.error(f"Error processing history range for {entity_id}: {str(e)}")
+        return {
+            "entity_id": entity_id,
+            "error": f"Error processing history: {str(e)}",
+            "states": [],
+            "count": 0,
+            "start_time": start_time,
+            "end_time": end_time or "now"
+        }
+
+@mcp.tool()
+@async_handler("get_statistics")
+async def get_statistics(
+    entity_id: str,
+    hours: int = 24,
+    period: str = "hour"
+) -> Dict[str, Any]:
+    """
+    Get AGGREGATED statistics for an entity (mean, min, max values)
+
+    TOKEN EFFICIENT - Returns aggregated data instead of raw states
+    - Uses Home Assistant's pre-calculated statistics via WebSocket
+    - Much smaller response size than raw history
+    - Perfect for trends, graphs, and analysis
+
+    When to use this tool:
+    - You need trends or patterns over time
+    - Large time ranges (days, weeks, months)
+    - Frequently-updating sensors
+    - You don't need exact state change timestamps
+
+    Aggregation Periods:
+    - "5minute": Most detailed, ~12 points per hour
+    - "hour": Good for daily views, 24 points per day
+    - "day": For monthly views
+    - "week": For quarterly views
+    - "month": For yearly views
+
+    Args:
+        entity_id: The entity ID to get statistics for
+        hours: Number of hours of statistics to retrieve (default: 24)
+        period: Statistics period: "5minute", "hour", "day", "week", "month" (default: "hour")
+
+    Returns:
+        A dictionary containing:
+        - entity_id: The entity ID requested
+        - period: The period used
+        - statistics: List of data points, each with:
+          * start: Timestamp (milliseconds)
+          * end: Timestamp (milliseconds)
+          * mean: Average value in period
+          * min: Minimum value in period
+          * max: Maximum value in period
+        - count: Number of statistical data points
+
+    Examples:
+        entity_id="sensor.temperature", hours=24, period="hour" - hourly averages for 24h
+        entity_id="sensor.power_usage", hours=168, period="day" - daily averages for 7 days
+
+    Note: Returns empty statistics if entity doesn't support long-term statistics
+    """
+    logger.info(f"Getting statistics for entity: {entity_id}, hours: {hours}, period: {period}")
+
+    try:
+        # Get statistics using the API function
+        stats_data = await get_entity_statistics(entity_id, hours, period)
+
+        # Check for errors from the API call
+        if isinstance(stats_data, dict) and "error" in stats_data:
+            return stats_data
+
+        # Extract statistics count
+        stats_list = stats_data.get("statistics", [])
+
+        return {
+            "entity_id": entity_id,
+            "period": period,
+            "hours_requested": hours,
+            "statistics": stats_list,
+            "count": len(stats_list)
+        }
+    except Exception as e:
+        logger.error(f"Error getting statistics for {entity_id}: {str(e)}")
+        return {
+            "entity_id": entity_id,
+            "error": f"Error retrieving statistics: {str(e)}",
+            "statistics": [],
+            "count": 0
+        }
+
+@mcp.tool()
+@async_handler("get_statistics_range")
+async def get_statistics_range(
+    entity_id: str,
+    start_time: str,
+    end_time: Optional[str] = None,
+    period: str = "hour"
+) -> Dict[str, Any]:
+    """
+    Get AGGREGATED statistics for a specific date/time range
+
+    BEST TOOL FOR HISTORICAL DATA - No token limits!
+    - Retrieves Home Assistant's long-term statistics via WebSocket
+    - Can handle ANY date range efficiently (days, months, years)
+    - Returns aggregated data (mean/min/max) instead of raw states
+
+    When to use this tool:
+    - ANY date range query (especially multi-day)
+    - Historical data analysis
+    - Frequently-updating sensors over long periods
+    - When raw history exceeds token limits
+
+    Aggregation Periods:
+    - "5minute": For detailed recent data (last 10 days)
+    - "hour": Best for daily/weekly ranges
+    - "day": Best for monthly ranges
+    - "week": Best for quarterly ranges
+    - "month": Best for yearly ranges
+
+    Args:
+        entity_id: The entity ID to get statistics for
+        start_time: Start time (ISO 8601, date only, or 'yesterday'/'today')
+        end_time: End time (optional, defaults to 'now')
+        period: Statistics period: "5minute", "hour", "day", "week", "month" (default: "hour")
+
+    Returns:
+        A dictionary containing:
+        - entity_id: The entity ID requested
+        - period: The period used
+        - start_time: The actual start time used
+        - end_time: The actual end time used
+        - statistics: List of data points, each with:
+          * start: Timestamp (milliseconds)
+          * end: Timestamp (milliseconds)
+          * mean: Average value in period
+          * min: Minimum value in period
+          * max: Maximum value in period
+        - count: Number of statistical data points
+
+    Examples:
+        entity_id="sensor.temperature", start_time="2024-10-01", end_time="2024-10-31", period="day"
+        entity_id="sensor.power", start_time="2024-01-01", end_time="2024-12-31", period="month"
+        entity_id="sensor.humidity", start_time="yesterday", period="5minute"
+
+    Pro Tip: If get_history_range returns a token error, use this tool with
+    the same date range to get the aggregated data instead.
+    """
+    logger.info(f"Getting statistics range for entity: {entity_id}, start: {start_time}, end: {end_time}, period: {period}")
+
+    try:
+        # Get statistics using the API function
+        stats_data = await get_entity_statistics_range(entity_id, start_time, end_time, period)
+
+        # Check for errors from the API call
+        if isinstance(stats_data, dict) and "error" in stats_data:
+            return stats_data
+
+        # Extract statistics count
+        stats_list = stats_data.get("statistics", [])
+
+        return {
+            "entity_id": entity_id,
+            "period": period,
+            "start_time": stats_data.get("start_time", start_time),
+            "end_time": stats_data.get("end_time", end_time or "now"),
+            "statistics": stats_list,
+            "count": len(stats_list)
+        }
+    except ValueError as e:
+        # Handle date parsing errors
+        logger.error(f"Date parsing error for {entity_id}: {str(e)}")
+        return {
+            "entity_id": entity_id,
+            "error": str(e),
+            "statistics": [],
+            "count": 0,
+            "start_time": start_time,
+            "end_time": end_time or "now"
+        }
+    except Exception as e:
+        logger.error(f"Error getting statistics range for {entity_id}: {str(e)}")
+        return {
+            "entity_id": entity_id,
+            "error": f"Error retrieving statistics: {str(e)}",
+            "statistics": [],
+            "count": 0,
+            "start_time": start_time,
+            "end_time": end_time or "now"
+        }
+
+@mcp.tool()
 @async_handler("get_error_log")
 async def get_error_log() -> Dict[str, Any]:
     """
-    Get the Home Assistant error log for troubleshooting
-    
+    Get the Home Assistant error log for troubleshooting using WebSocket API
+
     Returns:
         A dictionary containing:
-        - log_text: The full error log text
+        - records: List of error/warning log records (each with timestamp, level, name, message)
         - error_count: Number of ERROR entries found
         - warning_count: Number of WARNING entries found
         - integration_mentions: Map of integration names to mention counts
         - error: Error message if retrieval failed
-        
+
     Examples:
-        Returns errors, warnings count and integration mentions
+        Returns structured log records with errors and warnings count
     Best Practices:
         - Use this tool when troubleshooting specific Home Assistant errors
         - Look for patterns in repeated errors
         - Pay attention to timestamps to correlate errors with events
-        - Focus on integrations with many mentions in the log    
+        - Focus on integrations with many mentions in the log
+        - Note: Only returns the 50 most recent errors/warnings (Home Assistant default)
     """
     logger.info("Getting Home Assistant error log")
     return await get_hass_error_log()

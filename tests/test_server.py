@@ -52,7 +52,7 @@ class TestMCPServer:
         # List of expected tool functions
         expected_tools = [
             "get_version",
-            "get_entity", 
+            "get_entity",
             "list_entities",
             "entity_action",
             "domain_summary_tool",  # Domain summaries tool
@@ -60,11 +60,16 @@ class TestMCPServer:
             "reload_ha",
             "restart_ha",
             "list_automations",
+            "get_history",
+            "get_history_range",
+            "get_statistics",
+            "get_statistics_range",
+            "get_error_log",
             "list_labels_tool",
             "create_label_tool",
             "update_label_tool",
             "delete_label_tool",
-            "set_entity_labels"
+            "set_entity_labels",
         ]
         
         # Check that each expected tool function exists
@@ -161,7 +166,7 @@ class TestMCPServer:
         # List of expected tool functions
         tool_functions = [
             "get_version",
-            "get_entity", 
+            "get_entity",
             "list_entities",
             "entity_action",
             "domain_summary_tool",
@@ -169,14 +174,18 @@ class TestMCPServer:
             "reload_ha",
             "restart_ha",
             "list_automations",
-            "search_entities_tool", 
+            "search_entities_tool",
             "system_overview",
+            "get_history",
+            "get_history_range",
+            "get_statistics",
+            "get_statistics_range",
             "get_error_log",
             "list_labels_tool",
             "create_label_tool",
             "update_label_tool",
             "delete_label_tool",
-            "set_entity_labels"
+            "set_entity_labels",
         ]
         
         # Check that each tool function has a proper docstring and exists
@@ -354,6 +363,99 @@ class TestMCPServer:
             mock_get_state.return_value = mock_filtered
             result = await get_entity(entity_id="light.living_room")
             
-            # Verify the function call with lean=True parameter
-            mock_get_state.assert_called_with("light.living_room", lean=True)
-            assert result == mock_filtered
+        # Verify the function call with lean=True parameter
+        mock_get_state.assert_called_with("light.living_room", lean=True)
+        assert result == mock_filtered
+
+    @pytest.mark.asyncio
+    async def test_get_history_range_tool_success(self):
+        """get_history_range should flatten history data and include metadata."""
+        from app.server import get_history_range
+
+        history_payload = [
+            [
+                {"last_changed": "2025-01-01T00:00:00+00:00", "state": "on"},
+                {"last_changed": "2025-01-01T01:00:00+00:00", "state": "off"},
+            ]
+        ]
+
+        with patch(
+            "app.server.get_entity_history_range",
+            AsyncMock(return_value=history_payload),
+        ) as mock_history:
+            result = await get_history_range(
+                "light.living_room",
+                "2025-01-01T00:00:00Z",
+                "2025-01-01T02:00:00Z",
+            )
+
+            mock_history.assert_awaited_once_with(
+                "light.living_room",
+                "2025-01-01T00:00:00Z",
+                "2025-01-01T02:00:00Z",
+                True,
+            )
+            assert result["entity_id"] == "light.living_room"
+            assert result["count"] == 2
+            assert result["states"][0]["state"] == "on"
+            assert result["first_changed"] == "2025-01-01T00:00:00+00:00"
+            assert result["last_changed"] == "2025-01-01T01:00:00+00:00"
+
+    @pytest.mark.asyncio
+    async def test_get_history_range_tool_handles_errors(self):
+        """get_history_range should bubble up API errors in a structured payload."""
+        from app.server import get_history_range
+
+        with patch(
+            "app.server.get_entity_history_range",
+            AsyncMock(return_value={"error": "boom"}),
+        ) as mock_history:
+            result = await get_history_range("sensor.temp", "yesterday", "today")
+
+            mock_history.assert_awaited_once_with("sensor.temp", "yesterday", "today", True)
+            assert result["entity_id"] == "sensor.temp"
+            assert result["error"] == "boom"
+            assert result["states"] == []
+            assert result["count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_get_statistics_tool_success(self):
+        """get_statistics should delegate to hass helper and summarize count."""
+        from app.server import get_statistics
+
+        stats_payload = {
+            "entity_id": "sensor.power",
+            "statistics": [
+                {"start": 1, "end": 2, "mean": 10.5},
+                {"start": 2, "end": 3, "mean": 9.5},
+            ],
+            "period": "hour",
+        }
+
+        with patch(
+            "app.server.get_entity_statistics",
+            AsyncMock(return_value=stats_payload),
+        ) as mock_stats:
+            result = await get_statistics("sensor.power", hours=6, period="hour")
+
+            mock_stats.assert_awaited_once_with("sensor.power", 6, "hour")
+            assert result["entity_id"] == "sensor.power"
+            assert result["count"] == 2
+            assert result["statistics"][0]["mean"] == 10.5
+
+    @pytest.mark.asyncio
+    async def test_get_statistics_range_tool_handles_value_errors(self):
+        """get_statistics_range should capture parsing errors cleanly."""
+        from app.server import get_statistics_range
+
+        with patch(
+            "app.server.get_entity_statistics_range",
+            AsyncMock(side_effect=ValueError("bad date")),
+        ) as mock_stats:
+            result = await get_statistics_range("sensor.humidity", "invalid")
+
+            mock_stats.assert_awaited_once_with("sensor.humidity", "invalid", None, "hour")
+            assert result["entity_id"] == "sensor.humidity"
+            assert "bad date" in result["error"]
+            assert result["statistics"] == []
+            assert result["count"] == 0

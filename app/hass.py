@@ -218,6 +218,21 @@ async def _call_ws_command(command_type: str, payload: Optional[Dict[str, Any]] 
     except WebSocketException as exc:
         raise HomeAssistantWebSocketError(f"WebSocket error: {exc}") from exc
 
+
+async def call_websocket_api(message_type: str, **kwargs: Any) -> Any:
+    """
+    Convenience wrapper around the Home Assistant WebSocket API.
+
+    Args:
+        message_type: The WebSocket message type (e.g. recorder/statistics_during_period)
+        **kwargs: Optional payload fields to include in the request.
+
+    Returns:
+        The `result` portion of the websocket response.
+    """
+    payload = kwargs or None
+    return await _call_ws_command(message_type, payload)
+
 # Direct entity retrieval function
 async def get_all_entity_states() -> Dict[str, Dict[str, Any]]:
     """Fetch all entity states from Home Assistant"""
@@ -287,10 +302,14 @@ async def get_hass_version() -> str:
 async def get_entity_state(
     entity_id: str,
     fields: Optional[List[str]] = None,
-    lean: bool = False
+    lean: bool = False,
+    use_cache: bool = False  # Accept but ignore for now - TODO: implement caching
 ) -> Dict[str, Any]:
     """
     Get the state of a Home Assistant entity
+
+    TODO: Implement caching logic when use_cache=True
+    This would reduce API calls and improve performance for frequently accessed entities
     
     Args:
         entity_id: The entity ID to get
@@ -583,66 +602,160 @@ async def reload_home_assistant() -> Dict[str, Any]:
 @handle_api_errors
 async def get_hass_error_log() -> Dict[str, Any]:
     """
-    Get the Home Assistant error log for troubleshooting
-    
+    Get the Home Assistant error log for troubleshooting using WebSocket API
+
     Returns:
         A dictionary containing:
-        - log_text: The full error log text
+        - records: List of error/warning log records
         - error_count: Number of ERROR entries found
         - warning_count: Number of WARNING entries found
         - integration_mentions: Map of integration names to mention counts
         - error: Error message if retrieval failed
     """
     try:
-        # Call the Home Assistant API error_log endpoint
-        url = f"{HA_URL}/api/error_log"
-        headers = get_ha_headers()
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, headers=headers, timeout=30)
-            
-            if response.status_code == 200:
-                log_text = response.text
-                
-                # Count errors and warnings
-                error_count = log_text.count("ERROR")
-                warning_count = log_text.count("WARNING")
-                
-                # Extract integration mentions
-                import re
-                integration_mentions = {}
-                
-                # Look for patterns like [mqtt], [zwave], etc.
-                for match in re.finditer(r'\[([a-zA-Z0-9_]+)\]', log_text):
-                    integration = match.group(1).lower()
-                    if integration not in integration_mentions:
-                        integration_mentions[integration] = 0
-                    integration_mentions[integration] += 1
-                
-                return {
-                    "log_text": log_text,
-                    "error_count": error_count,
-                    "warning_count": warning_count,
-                    "integration_mentions": integration_mentions
-                }
-            else:
-                return {
-                    "error": f"Error retrieving error log: {response.status_code} {response.reason_phrase}",
-                    "details": response.text,
-                    "log_text": "",
-                    "error_count": 0,
-                    "warning_count": 0,
-                    "integration_mentions": {}
-                }
+        # Use WebSocket API to retrieve system_log records
+        # call_websocket_api returns result["result"] directly
+        records = await call_websocket_api("system_log/list")
+
+        if not records or not isinstance(records, list):
+            return {
+                "error": "Failed to retrieve system log records",
+                "records": [],
+                "error_count": 0,
+                "warning_count": 0,
+                "integration_mentions": {}
+            }
+
+        # Count errors and warnings
+        error_count = sum(1 for r in records if r.get("level") == "ERROR")
+        warning_count = sum(1 for r in records if r.get("level") == "WARNING")
+
+        # Extract integration mentions from logger names
+        integration_mentions = {}
+        for record in records:
+            logger_name = record.get("name", "")
+            # Extract integration name from logger like "homeassistant.components.mqtt"
+            if "homeassistant.components." in logger_name:
+                integration = logger_name.split("homeassistant.components.")[1].split(".")[0]
+                integration_mentions[integration] = integration_mentions.get(integration, 0) + 1
+
+        return {
+            "records": records,
+            "error_count": error_count,
+            "warning_count": warning_count,
+            "integration_mentions": integration_mentions
+        }
     except Exception as e:
         logger.error(f"Error retrieving Home Assistant error log: {str(e)}")
         return {
             "error": f"Error retrieving error log: {str(e)}",
-            "log_text": "",
+            "records": [],
             "error_count": 0,
             "warning_count": 0,
             "integration_mentions": {}
         }
+
+def parse_datetime(dt_input: Union[str, datetime]) -> datetime:
+    """
+    Parse datetime input to timezone-aware datetime object.
+    Simple implementation supporting ISO 8601 and basic keywords.
+
+    Supported formats:
+    - ISO 8601: "2025-10-28T10:00:00Z", "2025-10-28T10:00:00+00:00"
+    - Date only: "2025-10-28" (assumes start of day in UTC)
+    - Keywords: "now", "today", "yesterday"
+
+    Returns:
+        datetime: Timezone-aware datetime in UTC
+    """
+    if isinstance(dt_input, datetime):
+        return dt_input if dt_input.tzinfo else dt_input.replace(tzinfo=timezone.utc)
+
+    dt_str = str(dt_input).strip()
+
+    # Handle special keywords
+    if dt_str.lower() == "now":
+        return datetime.now(timezone.utc)
+    if dt_str.lower() == "today":
+        return datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    if dt_str.lower() == "yesterday":
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        return today - timedelta(days=1)
+
+    # Handle date-only format (YYYY-MM-DD)
+    if len(dt_str) == 10 and dt_str[4] == '-' and dt_str[7] == '-':
+        dt = datetime.strptime(dt_str, "%Y-%m-%d")
+        return dt.replace(tzinfo=timezone.utc)
+
+    # Handle ISO 8601
+    if dt_str.endswith('Z'):
+        dt_str = dt_str[:-1] + '+00:00'
+
+    try:
+        dt = datetime.fromisoformat(dt_str)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise ValueError(
+            f"Invalid datetime format: {dt_input}. "
+            f"Use ISO 8601 (e.g., '2025-10-28T10:00:00Z'), "
+            f"date only (e.g., '2025-10-28'), "
+            f"or keywords: 'now', 'today', 'yesterday'"
+        )
+
+@handle_api_errors
+async def get_entity_history_range(
+    entity_id: str,
+    start_time: Union[str, datetime],
+    end_time: Optional[Union[str, datetime]] = None,
+    minimal_response: bool = True
+) -> List[Dict[str, Any]]:
+    """
+    Get entity history for a specific date/time range.
+
+    Args:
+        entity_id: The entity ID to get history for
+        start_time: ISO 8601 string or datetime object
+        end_time: ISO 8601 string or datetime object (defaults to now)
+        minimal_response: Reduce response size (default: True)
+
+    Returns:
+        A list of state change objects, or an error dictionary
+    """
+    client = await get_client()
+
+    # Parse start_time
+    start_dt = parse_datetime(start_time)
+
+    # Parse end_time (default to now)
+    if end_time is None:
+        end_dt = datetime.now(timezone.utc)
+    else:
+        end_dt = parse_datetime(end_time)
+
+    # Validate time range
+    if start_dt >= end_dt:
+        raise ValueError(f"start_time must be before end_time")
+
+    # Format for API
+    start_time_iso = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_time_iso = end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Construct the API URL
+    url = f"{HA_URL}/api/history/period/{start_time_iso}"
+
+    # Set query parameters
+    params = {
+        "filter_entity_id": entity_id,
+        "minimal_response": str(minimal_response).lower(),
+        "end_time": end_time_iso,
+    }
+
+    # Make the API call
+    response = await client.get(url, headers=get_ha_headers(), params=params)
+    response.raise_for_status()
+
+    # Return the JSON response
+    return response.json()
 
 @handle_api_errors
 async def get_entity_history(entity_id: str, hours: int) -> List[Dict[str, Any]]:
@@ -656,32 +769,139 @@ async def get_entity_history(entity_id: str, hours: int) -> List[Dict[str, Any]]
     Returns:
         A list of state change objects, or an error dictionary.
     """
-    client = await get_client()
-    
-    # Calculate the end time for the history lookup
+    # Calculate time range
     end_time = datetime.now(timezone.utc)
-    end_time_iso = end_time.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    # Calculate the start time for the history lookup based on end_time
     start_time = end_time - timedelta(hours=hours)
-    start_time_iso = start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # Construct the API URL
-    url = f"{HA_URL}/api/history/period/{start_time_iso}"
-    
-    # Set query parameters
-    params = {
-        "filter_entity_id": entity_id,
-        "minimal_response": "true",
-        "end_time": end_time_iso,
+    # Delegate to the range function
+    return await get_entity_history_range(
+        entity_id=entity_id,
+        start_time=start_time,
+        end_time=end_time,
+        minimal_response=True
+    )
+
+@handle_api_errors
+async def get_entity_statistics(
+    entity_id: str,
+    hours: int,
+    period: str = "5minute"
+) -> Dict[str, Any]:
+    """
+    Get statistical data for an entity for recent time period.
+
+    Args:
+        entity_id: The entity ID to get statistics for
+        hours: Number of hours of statistics to retrieve
+        period: Statistics period: "5minute" or "hour"
+
+    Returns:
+        A dictionary containing statistical data with aggregated values
+    """
+    # Calculate time range
+    end_time = datetime.now(timezone.utc)
+    start_time = end_time - timedelta(hours=hours)
+
+    # Delegate to the range function
+    return await get_entity_statistics_range(
+        entity_id=entity_id,
+        start_time=start_time,
+        end_time=end_time,
+        period=period
+    )
+
+@handle_api_errors
+async def get_entity_statistics_range(
+    entity_id: str,
+    start_time: Union[str, datetime],
+    end_time: Optional[Union[str, datetime]] = None,
+    period: str = "hour"
+) -> Dict[str, Any]:
+    """
+    Get statistical data for an entity for a specific date/time range.
+
+    Args:
+        entity_id: The entity ID to get statistics for
+        start_time: ISO 8601 string or datetime object
+        end_time: ISO 8601 string or datetime object (defaults to now)
+        period: Statistics period: "5minute", "hour", "day", "week", or "month"
+
+    Returns:
+        A dictionary containing:
+        - entity_id: The entity ID requested
+        - period: The period requested
+        - start_time: The actual start time used
+        - end_time: The actual end time used
+        - statistics: List of statistical data points with mean, min, max values
+    """
+    # Parse start_time
+    start_dt = parse_datetime(start_time)
+
+    # Parse end_time (default to now)
+    if end_time is None:
+        end_dt = datetime.now(timezone.utc)
+    else:
+        end_dt = parse_datetime(end_time)
+
+    # Validate time range
+    if start_dt >= end_dt:
+        raise ValueError(f"start_time must be before end_time")
+
+    # Format for API
+    start_time_iso = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_time_iso = end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Map our period names to HA's expected values
+    period_map = {
+        "5minute": "5minute",
+        "hour": "hour",
+        "day": "day",
+        "week": "week",
+        "month": "month"
     }
-    
-    # Make the API call
-    response = await client.get(url, headers=get_ha_headers(), params=params)
-    response.raise_for_status()
-    
-    # Return the JSON response
-    return response.json()
+
+    if period not in period_map:
+        raise ValueError(f"Invalid period: {period}. Must be one of: {list(period_map.keys())}")
+
+    try:
+        # Use WebSocket API to get statistics
+        result = await call_websocket_api(
+            "recorder/statistics_during_period",
+            start_time=start_time_iso,
+            end_time=end_time_iso,
+            statistic_ids=[entity_id],
+            period=period_map[period],
+            types=["mean", "min", "max", "state", "sum"]
+        )
+
+        # Extract statistics from the response
+        statistics = []
+        if entity_id in result:
+            statistics = result[entity_id]
+        elif isinstance(result, dict) and len(result) > 0:
+            # Sometimes returns with different key format
+            first_key = list(result.keys())[0]
+            statistics = result[first_key]
+
+        return {
+            "entity_id": entity_id,
+            "period": period,
+            "start_time": start_time_iso,
+            "end_time": end_time_iso,
+            "statistics": statistics
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting statistics for {entity_id}: {str(e)}")
+        # Return empty statistics with error message
+        return {
+            "entity_id": entity_id,
+            "period": period,
+            "start_time": start_time_iso,
+            "end_time": end_time_iso,
+            "statistics": [],
+            "error": f"Failed to retrieve statistics: {str(e)}"
+        }
 
 @handle_api_errors
 async def get_system_overview() -> Dict[str, Any]:
