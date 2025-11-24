@@ -50,6 +50,7 @@ from app.hass import (
     get_entities,
     get_automations,
     restart_home_assistant,
+    check_home_assistant_config,
     reload_home_assistant,
     cleanup_client,
     filter_fields,
@@ -1041,10 +1042,42 @@ async def restart_ha() -> Dict[str, Any]:
 @async_handler("reload_ha")
 async def reload_ha() -> Dict[str, Any]:
     """
-    Reload Home Assistant core configuration without a full restart
+    Check configuration validity and reload Home Assistant core configuration
     """
+    logger.info("Checking Home Assistant configuration before reload")
+    check_result = await check_home_assistant_config()
+
+    if isinstance(check_result, dict) and "error" in check_result:
+        logger.error("Configuration check failed: %s", check_result["error"])
+        return check_result
+
+    if isinstance(check_result, dict):
+        check_status = check_result.get("result", "").lower()
+        if check_status == "invalid":
+            error_message = check_result.get(
+                "errors",
+                "Home Assistant configuration check reported invalid settings",
+            )
+            logger.error("Configuration invalid, aborting reload: %s", error_message)
+            return {
+                "error": error_message,
+                "check_result": check_result,
+            }
+
     logger.info("Reloading Home Assistant core configuration")
-    return await reload_home_assistant()
+    reload_result = await reload_home_assistant()
+
+    if isinstance(reload_result, dict) and "error" in reload_result:
+        logger.error("Reload failed: %s", reload_result["error"])
+        return {
+            "error": reload_result["error"],
+            "check_result": check_result,
+        }
+
+    return {
+        "check_result": check_result,
+        "reload_result": reload_result,
+    }
 
 @mcp.tool()
 @async_handler("call_service")

@@ -595,6 +595,17 @@ async def restart_home_assistant() -> Dict[str, Any]:
     return await call_service("homeassistant", "restart", {})
 
 @handle_api_errors
+async def check_home_assistant_config() -> Dict[str, Any]:
+    """Run Home Assistant's configuration check and return the result"""
+    client = await get_client()
+    response = await client.post(
+        f"{HA_URL}/api/config/core/check_config",
+        headers=get_ha_headers(),
+    )
+    response.raise_for_status()
+    return response.json()
+
+@handle_api_errors
 async def reload_home_assistant() -> Dict[str, Any]:
     """Reload Home Assistant core configuration without a full restart"""
     return await call_service("homeassistant", "reload_core_config", {})

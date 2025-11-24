@@ -157,6 +157,38 @@ class TestMCPServer:
             result = await call_service_tool("automation", "reload")
             mock_call.assert_awaited_once_with("automation", "reload", {})
             assert result == {"response": []}
+
+    @pytest.mark.asyncio
+    async def test_reload_ha_runs_check_before_reload(self):
+        """reload_ha should run the config check and include both results."""
+        from app.server import reload_ha
+
+        check_payload = {"result": "valid"}
+        reload_payload = {"status": "reloaded"}
+
+        with patch("app.server.check_home_assistant_config", AsyncMock(return_value=check_payload)) as mock_check, \
+             patch("app.server.reload_home_assistant", AsyncMock(return_value=reload_payload)) as mock_reload:
+            result = await reload_ha()
+
+        assert result == {"check_result": check_payload, "reload_result": reload_payload}
+        mock_check.assert_awaited_once()
+        mock_reload.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_reload_ha_aborts_on_invalid_config(self):
+        """reload_ha should not reload when the config check fails."""
+        from app.server import reload_ha
+
+        invalid_payload = {"result": "invalid", "errors": "Bad config"}
+
+        with patch("app.server.check_home_assistant_config", AsyncMock(return_value=invalid_payload)) as mock_check, \
+             patch("app.server.reload_home_assistant", AsyncMock()) as mock_reload:
+            result = await reload_ha()
+
+        assert result["error"] == "Bad config"
+        assert result["check_result"] == invalid_payload
+        mock_check.assert_awaited_once()
+        mock_reload.assert_not_called()
             
     def test_tools_have_proper_docstrings(self):
         """Test that tool functions have proper docstrings"""

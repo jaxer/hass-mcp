@@ -1,6 +1,6 @@
 import pytest
 import asyncio
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch, AsyncMock, ANY
 import json
 import httpx
 from typing import Dict, List, Any
@@ -8,7 +8,7 @@ from typing import Dict, List, Any
 from app.hass import (
     get_entity_state, call_service, get_entities, get_automations, handle_api_errors,
     list_labels, create_label, update_label, delete_label, update_entity_labels,
-    reload_home_assistant
+    reload_home_assistant, check_home_assistant_config
 )
 
 class TestHassAPI:
@@ -156,6 +156,29 @@ class TestHassAPI:
 
                 assert result == mock_result
                 mock_call.assert_awaited_once_with("homeassistant", "reload_core_config", {})
+
+    @pytest.mark.asyncio
+    async def test_check_home_assistant_config(self, mock_config):
+        """Config check helper should hit the correct endpoint."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"result": "valid"}
+
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        with patch('app.hass.get_client', return_value=mock_client):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    with patch('app.hass.get_ha_headers', return_value={"Authorization": "Bearer test"}) as mock_headers:
+                        result = await check_home_assistant_config()
+
+        assert result == {"result": "valid"}
+        mock_client.post.assert_awaited_once()
+        called_url = mock_client.post.call_args[0][0]
+        assert called_url == f"{mock_config['hass_url']}/api/config/core/check_config"
+        called_headers = mock_client.post.call_args[1]["headers"]
+        assert called_headers == {"Authorization": "Bearer test"}
 
     @pytest.mark.asyncio
     async def test_get_automations(self, mock_config):
