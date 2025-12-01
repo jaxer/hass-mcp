@@ -584,6 +584,64 @@ async def get_automations() -> List[Dict[str, Any]]:
         
     return result
 
+def _normalize_automation_item_id(automation_id: str) -> str:
+    """Return the slug portion of an automation entity_id."""
+    item_id = automation_id.strip()
+    if not item_id:
+        return ""
+
+    if item_id.startswith("automation."):
+        _, item_id = item_id.split(".", 1)
+
+    return item_id
+
+@handle_api_errors
+async def list_automation_traces(automation_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """List stored Home Assistant automation traces via the websocket API."""
+    payload: Dict[str, Any] = {"domain": "automation"}
+
+    if automation_id:
+        item_id = _normalize_automation_item_id(automation_id)
+        if not item_id:
+            return [{"error": "automation_id cannot be empty"}]
+        payload["item_id"] = item_id
+
+    traces = await call_websocket_api("trace/list", **payload)
+
+    if isinstance(traces, list):
+        return traces
+
+    if isinstance(traces, dict):
+        return [traces]
+
+    return [{"error": "Unexpected response while retrieving automation traces"}]
+
+@handle_api_errors
+async def get_automation_trace(automation_id: str, run_id: str) -> Dict[str, Any]:
+    """Fetch the detailed trace for a specific automation run."""
+    if not automation_id or not automation_id.strip():
+        return {"error": "automation_id is required"}
+
+    if not run_id or not run_id.strip():
+        return {"error": "run_id is required"}
+
+    item_id = _normalize_automation_item_id(automation_id)
+    if not item_id:
+        return {"error": "automation_id cannot be empty"}
+
+    payload = {
+        "domain": "automation",
+        "item_id": item_id,
+        "run_id": run_id.strip(),
+    }
+
+    trace = await call_websocket_api("trace/get", **payload)
+
+    if isinstance(trace, dict):
+        return trace
+
+    return {"trace": trace}
+
 @handle_api_errors
 async def reload_automations() -> Dict[str, Any]:
     """Reload all automations in Home Assistant"""

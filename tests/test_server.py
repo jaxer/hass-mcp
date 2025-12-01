@@ -60,6 +60,8 @@ class TestMCPServer:
             "reload_ha",
             "restart_ha",
             "list_automations",
+            "list_automation_traces",
+            "get_automation_trace",
             "get_history",
             "get_history_range",
             "get_statistics",
@@ -149,6 +151,58 @@ class TestMCPServer:
             assert "error" not in result
 
     @pytest.mark.asyncio
+    async def test_list_automation_traces_tool(self):
+        """Automation trace listing should wrap responses and surface errors."""
+        from app.server import list_automation_traces
+
+        traces = [{"run_id": "1", "timestamp": "2025-03-01T00:00:00Z"}]
+
+        with patch(
+            "app.server.ha_list_automation_traces",
+            AsyncMock(return_value=traces),
+        ) as mock_list:
+            result = await list_automation_traces("automation.morning")
+
+        mock_list.assert_awaited_once_with(automation_id="automation.morning")
+        assert result["count"] == 1
+        assert result["traces"] == traces
+        assert result["automation_id"] == "automation.morning"
+
+        with patch(
+            "app.server.ha_list_automation_traces",
+            AsyncMock(return_value=[{"error": "boom"}]),
+        ):
+            error_result = await list_automation_traces()
+
+        assert error_result["count"] == 0
+        assert error_result["traces"] == []
+        assert error_result["error"] == "boom"
+
+    @pytest.mark.asyncio
+    async def test_get_automation_trace_tool(self):
+        """Detailed trace fetch should bubble errors from the helper."""
+        from app.server import get_automation_trace
+
+        trace_payload = {"trace": [], "domain": "automation"}
+
+        with patch(
+            "app.server.ha_get_automation_trace",
+            AsyncMock(return_value=trace_payload),
+        ) as mock_get:
+            result = await get_automation_trace("automation.morning", "1")
+
+        mock_get.assert_awaited_once_with(automation_id="automation.morning", run_id="1")
+        assert result is trace_payload
+
+        with patch(
+            "app.server.ha_get_automation_trace",
+            AsyncMock(return_value={"error": "missing"}),
+        ):
+            error_result = await get_automation_trace("automation.morning", "1")
+
+        assert error_result["error"] == "missing"
+
+    @pytest.mark.asyncio
     async def test_call_service_tool_wraps_list_response(self):
         """call_service_tool should wrap non-dict responses for MCP clients."""
         from app.server import call_service_tool
@@ -206,6 +260,8 @@ class TestMCPServer:
             "reload_ha",
             "restart_ha",
             "list_automations",
+            "list_automation_traces",
+            "get_automation_trace",
             "search_entities_tool",
             "system_overview",
             "get_history",

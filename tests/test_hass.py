@@ -8,7 +8,8 @@ from typing import Dict, List, Any
 from app.hass import (
     get_entity_state, call_service, get_entities, get_automations, handle_api_errors,
     list_labels, create_label, update_label, delete_label, update_entity_labels,
-    reload_home_assistant, check_home_assistant_config
+    reload_home_assistant, check_home_assistant_config, list_automation_traces,
+    get_automation_trace
 )
 
 class TestHassAPI:
@@ -387,3 +388,56 @@ class TestHassAPI:
                         "config/entity_registry/update",
                         {"entity_id": "automation.test", "labels": ["abc"]}
                     )
+
+    @pytest.mark.asyncio
+    async def test_list_automation_traces(self, mock_config):
+        """Ensure automation trace listing uses the websocket trace API and normalizes IDs."""
+        mock_traces = [{"run_id": "123", "timestamp": "2025-03-01T00:00:00Z"}]
+        ws_mock = AsyncMock(return_value=mock_traces)
+
+        with patch('app.hass.call_websocket_api', ws_mock):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    traces = await list_automation_traces("automation.morning_lights")
+                    assert traces == mock_traces
+                    ws_mock.assert_awaited_once_with(
+                        "trace/list",
+                        domain="automation",
+                        item_id="morning_lights"
+                    )
+
+        # When called without a filter we should omit item_id
+        ws_mock.reset_mock()
+        ws_mock.return_value = mock_traces
+        with patch('app.hass.call_websocket_api', ws_mock):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    await list_automation_traces()
+                    ws_mock.assert_awaited_once_with(
+                        "trace/list",
+                        domain="automation"
+                    )
+
+    @pytest.mark.asyncio
+    async def test_get_automation_trace(self, mock_config):
+        """Ensure the detailed trace fetch validates inputs and calls the API."""
+        mock_trace = {"domain": "automation", "item_id": "morning_lights", "trace": []}
+        ws_mock = AsyncMock(return_value=mock_trace)
+
+        with patch('app.hass.call_websocket_api', ws_mock):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    trace = await get_automation_trace("automation.morning_lights", "1")
+                    assert trace == mock_trace
+                    ws_mock.assert_awaited_once_with(
+                        "trace/get",
+                        domain="automation",
+                        item_id="morning_lights",
+                        run_id="1"
+                    )
+
+        invalid = await get_automation_trace(" ", "1")
+        assert "error" in invalid
+
+        missing_run = await get_automation_trace("automation.morning", "")
+        assert "error" in missing_run

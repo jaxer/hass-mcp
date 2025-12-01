@@ -76,6 +76,7 @@ Following this flow ensures MCP changes work through the same path the user will
 
 ## Useful Commands & References
 - **Inspect HA labels/entities:** use the MCP tools (`list_labels`, `list_entities`, etc.) through the Codex MCP integration; this avoids hand-rolling HTTP calls.
+- **Automation traces:** `list_automation_traces` surfaces recent runs (with `run_id`s) and `get_automation_trace` returns the detailed flow graph—perfect for debugging why an automation behaved a certain way.
 - **Search the codebase:** `rg 'pattern'` (preferred over `grep` for speed).
 - **Format JSON output for docs:** `python -m json.tool` or `jq` if needed (both available in the sandbox).
 - **Home Assistant token:** stored in `codex-config.toml`; never echo it in logs or responses.

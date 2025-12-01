@@ -27,7 +27,7 @@ Hass-MCP enables AI assistants like Claude to interact directly with your Home A
 
 - **Entity Management**: Get states, control devices, and search for entities
 - **Domain Summaries**: Get high-level information about entity types
-- **Automation Support**: List and control automations
+- **Automation Support**: List, control, and inspect traces for automations
 - **Guided Conversations**: Use prompts for common tasks like creating automations
 - **Smart Search**: Find entities by name, type, or state
 - **Token Efficiency**: Lean JSON responses to minimize token usage
@@ -179,6 +179,8 @@ Hass-MCP provides several tools for interacting with Home Assistant:
 - `search_entities_tool`: Search for entities matching a query
 - `domain_summary_tool`: Get a summary of a domain's entities
 - `list_automations`: Get a list of all automations
+- `list_automation_traces`: Summarize recent automation runs and get available run IDs
+- `get_automation_trace`: Fetch the detailed trace graph for a specific automation run
 - `call_service_tool`: Call any Home Assistant service
 - `reload_ha`: Run Home Assistant's configuration check and reload the core configuration without restarting
 - `restart_ha`: Restart Home Assistant

@@ -66,6 +66,8 @@ from app.hass import (
     update_label,
     delete_label,
     update_entity_labels,
+    list_automation_traces as ha_list_automation_traces,
+    get_automation_trace as ha_get_automation_trace,
 )
 
 # Type variable for generic functions
@@ -931,6 +933,56 @@ async def list_automations() -> Dict[str, Any]:
             key="automations",
             metadata={"error": f"Unexpected error: {str(e)}"},
         )
+
+@mcp.tool()
+@async_handler("list_automation_traces")
+async def list_automation_traces(automation_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    List stored automation traces (recent runs) for troubleshooting.
+
+    Args:
+        automation_id: Optional automation entity_id or slug to filter results.
+
+    Returns:
+        A dictionary containing:
+        - count: number of trace summaries
+        - traces: list of trace metadata entries
+        - automation_id: echo of the provided filter (if any)
+        - error: present only when Home Assistant returned/raised an error
+    """
+    logger.info("Listing automation traces%s", f" for {automation_id}" if automation_id else "")
+    traces = await ha_list_automation_traces(automation_id=automation_id)
+
+    error = _extract_error_response(traces)
+    metadata: Dict[str, Any] = {"automation_id": automation_id}
+
+    if error:
+        metadata["error"] = error.get("error") or "Failed to retrieve automation traces"
+        return _format_list_response([], key="traces", metadata=metadata)
+
+    return _format_list_response(traces, key="traces", metadata=metadata)
+
+@mcp.tool()
+@async_handler("get_automation_trace")
+async def get_automation_trace(automation_id: str, run_id: str) -> Dict[str, Any]:
+    """
+    Retrieve the detailed execution trace for a single automation run.
+
+    Args:
+        automation_id: The automation entity_id or slug (e.g., 'automation.night_lights').
+        run_id: The trace run_id returned by list_automation_traces.
+
+    Returns:
+        The trace payload provided by Home Assistant, or an error dictionary.
+    """
+    logger.info("Fetching automation trace for %s (run_id=%s)", automation_id, run_id)
+    trace = await ha_get_automation_trace(automation_id=automation_id, run_id=run_id)
+
+    error = _extract_error_response(trace)
+    if error:
+        return error
+
+    return trace
 
 # Label management MCP tools
 @mcp.tool()
