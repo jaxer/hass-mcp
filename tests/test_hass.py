@@ -394,25 +394,32 @@ class TestHassAPI:
         """Ensure automation trace listing uses the websocket trace API and normalizes IDs."""
         mock_traces = [{"run_id": "123", "timestamp": "2025-03-01T00:00:00Z"}]
         ws_mock = AsyncMock(return_value=mock_traces)
+        state_mock = AsyncMock(return_value={"attributes": {"id": "1724195401005"}})
 
-        with patch('app.hass.call_websocket_api', ws_mock):
+        with patch('app.hass.call_websocket_api', ws_mock), \
+             patch('app.hass.get_entity_state', state_mock):
             with patch('app.hass.HA_URL', mock_config["hass_url"]):
                 with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
                     traces = await list_automation_traces("automation.morning_lights")
                     assert traces == mock_traces
+                    state_mock.assert_awaited_once_with("automation.morning_lights", lean=False)
                     ws_mock.assert_awaited_once_with(
                         "trace/list",
                         domain="automation",
-                        item_id="morning_lights"
+                        item_id="1724195401005"
                     )
 
-        # When called without a filter we should omit item_id
+        # When called without a filter we should omit item_id and skip entity lookups
         ws_mock.reset_mock()
+        state_mock.reset_mock()
         ws_mock.return_value = mock_traces
-        with patch('app.hass.call_websocket_api', ws_mock):
+
+        with patch('app.hass.call_websocket_api', ws_mock), \
+             patch('app.hass.get_entity_state', state_mock):
             with patch('app.hass.HA_URL', mock_config["hass_url"]):
                 with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
                     await list_automation_traces()
+                    state_mock.assert_not_called()
                     ws_mock.assert_awaited_once_with(
                         "trace/list",
                         domain="automation"
@@ -423,16 +430,19 @@ class TestHassAPI:
         """Ensure the detailed trace fetch validates inputs and calls the API."""
         mock_trace = {"domain": "automation", "item_id": "morning_lights", "trace": []}
         ws_mock = AsyncMock(return_value=mock_trace)
+        state_mock = AsyncMock(return_value={"attributes": {"id": "1724195401005"}})
 
-        with patch('app.hass.call_websocket_api', ws_mock):
+        with patch('app.hass.call_websocket_api', ws_mock), \
+             patch('app.hass.get_entity_state', state_mock):
             with patch('app.hass.HA_URL', mock_config["hass_url"]):
                 with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
                     trace = await get_automation_trace("automation.morning_lights", "1")
                     assert trace == mock_trace
+                    state_mock.assert_awaited_once_with("automation.morning_lights", lean=False)
                     ws_mock.assert_awaited_once_with(
                         "trace/get",
                         domain="automation",
-                        item_id="morning_lights",
+                        item_id="1724195401005",
                         run_id="1"
                     )
 
@@ -441,3 +451,21 @@ class TestHassAPI:
 
         missing_run = await get_automation_trace("automation.morning", "")
         assert "error" in missing_run
+
+        # Numeric ids should bypass entity lookups
+        ws_mock.reset_mock()
+        state_mock.reset_mock()
+        ws_mock.return_value = mock_trace
+
+        with patch('app.hass.call_websocket_api', ws_mock), \
+             patch('app.hass.get_entity_state', state_mock):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    await get_automation_trace("1724195401005", "1")
+                    state_mock.assert_not_called()
+                    ws_mock.assert_awaited_once_with(
+                        "trace/get",
+                        domain="automation",
+                        item_id="1724195401005",
+                        run_id="1"
+                    )

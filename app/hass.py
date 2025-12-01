@@ -584,16 +584,24 @@ async def get_automations() -> List[Dict[str, Any]]:
         
     return result
 
-def _normalize_automation_item_id(automation_id: str) -> str:
-    """Return the slug portion of an automation entity_id."""
-    item_id = automation_id.strip()
-    if not item_id:
-        return ""
+async def _resolve_automation_trace_item_id(automation_id: str) -> Union[str, Dict[str, Any]]:
+    """Return the trace item_id for an automation, accepting slug, entity_id, or numeric id."""
+    normalized = automation_id.strip()
+    if not normalized:
+        return {"error": "automation_id cannot be empty"}
 
-    if item_id.startswith("automation."):
-        _, item_id = item_id.split(".", 1)
+    if normalized.isdigit():
+        return normalized
 
-    return item_id
+    entity_id = normalized if normalized.startswith("automation.") else f"automation.{normalized}"
+    slug = entity_id.split(".", 1)[1]
+
+    state = await get_entity_state(entity_id, lean=False)
+    if isinstance(state, dict) and "error" in state:
+        return {"error": state["error"]}
+
+    attr_id = state.get("attributes", {}).get("id") if isinstance(state, dict) else None
+    return str(attr_id) if attr_id else slug
 
 @handle_api_errors
 async def list_automation_traces(automation_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -601,10 +609,10 @@ async def list_automation_traces(automation_id: Optional[str] = None) -> List[Di
     payload: Dict[str, Any] = {"domain": "automation"}
 
     if automation_id:
-        item_id = _normalize_automation_item_id(automation_id)
-        if not item_id:
-            return [{"error": "automation_id cannot be empty"}]
-        payload["item_id"] = item_id
+        resolved = await _resolve_automation_trace_item_id(automation_id)
+        if isinstance(resolved, dict) and "error" in resolved:
+            return [resolved]
+        payload["item_id"] = resolved
 
     traces = await call_websocket_api("trace/list", **payload)
 
@@ -625,13 +633,13 @@ async def get_automation_trace(automation_id: str, run_id: str) -> Dict[str, Any
     if not run_id or not run_id.strip():
         return {"error": "run_id is required"}
 
-    item_id = _normalize_automation_item_id(automation_id)
-    if not item_id:
-        return {"error": "automation_id cannot be empty"}
+    resolved = await _resolve_automation_trace_item_id(automation_id)
+    if isinstance(resolved, dict) and "error" in resolved:
+        return resolved
 
     payload = {
         "domain": "automation",
-        "item_id": item_id,
+        "item_id": resolved,
         "run_id": run_id.strip(),
     }
 
