@@ -2,7 +2,7 @@ import functools
 import logging
 import json
 import httpx
-from typing import List, Dict, Any, Optional, Callable, Awaitable, TypeVar, cast, Sequence
+from typing import List, Dict, Any, Optional, Callable, Awaitable, TypeVar, cast, Sequence, Union
 
 # Set up logging
 logging.basicConfig(
@@ -74,6 +74,11 @@ from app.hass import (
     create_lovelace_dashboard,
     update_lovelace_dashboard,
     delete_lovelace_dashboard,
+    list_lovelace_panels,
+    get_lovelace_panel,
+    update_lovelace_panel_view,
+    add_lovelace_panel,
+    delete_lovelace_panel,
     list_automation_traces as ha_list_automation_traces,
     get_automation_trace as ha_get_automation_trace,
 )
@@ -1097,7 +1102,24 @@ async def list_lovelace_dashboards_tool() -> Dict[str, Any]:
     if error:
         return error
 
-    return _format_list_response(dashboards, key="dashboards")
+    dashboards_with_panels: List[Dict[str, Any]] = []
+    for dashboard in dashboards:
+        dashboard_entry = dict(dashboard)
+        try:
+            panels = await list_lovelace_panels(url_path=dashboard.get("url_path"))
+            panel_error = _extract_error_response(panels)
+            if panel_error:
+                dashboard_entry["panels_error"] = panel_error.get("error")
+            else:
+                dashboard_entry["panels"] = panels.get("panels", [])
+                dashboard_entry["panel_count"] = panels.get("count", len(dashboard_entry.get("panels", [])))
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("Failed to list panels for %s: %s", dashboard.get("id"), exc)
+            dashboard_entry["panels_error"] = str(exc)
+
+        dashboards_with_panels.append(dashboard_entry)
+
+    return _format_list_response(dashboards_with_panels, key="dashboards")
 
 @mcp.tool()
 @async_handler("create_lovelace_dashboard")
@@ -1151,6 +1173,85 @@ async def delete_lovelace_dashboard_tool(dashboard_id: str) -> Dict[str, Any]:
     """
     logger.info("Deleting Lovelace dashboard %s", dashboard_id)
     return await delete_lovelace_dashboard(dashboard_id=dashboard_id)
+
+@mcp.tool()
+@async_handler("list_lovelace_panels")
+async def list_lovelace_panels_tool(url_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    List panels (views) for a Lovelace dashboard with lightweight metadata.
+    """
+    logger.info("Listing Lovelace panels for %s", url_path or "default dashboard")
+    result = await list_lovelace_panels(url_path=url_path)
+    error = _extract_error_response(result)
+    if error:
+        return error
+    return result
+
+@mcp.tool()
+@async_handler("get_lovelace_panel")
+async def get_lovelace_panel_tool(
+    panel_id: Union[str, int],
+    url_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Fetch a single Lovelace panel (view) definition without returning the whole dashboard.
+    """
+    logger.info("Fetching Lovelace panel %s from %s", panel_id, url_path)
+    result = await get_lovelace_panel(panel_id=panel_id, url_path=url_path)
+    error = _extract_error_response(result)
+    if error:
+        return error
+    return result
+
+@mcp.tool()
+@async_handler("update_lovelace_panel_view")
+async def update_lovelace_panel_view_tool(
+    panel_id: Union[str, int],
+    panel: Dict[str, Any],
+    url_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Replace a Lovelace panel with the provided definition (minimal payload).
+    """
+    logger.info("Updating Lovelace panel %s in %s", panel_id, url_path)
+    result = await update_lovelace_panel_view(panel_id=panel_id, panel=panel, url_path=url_path)
+    error = _extract_error_response(result)
+    if error:
+        return error
+    return result
+
+@mcp.tool()
+@async_handler("add_lovelace_panel")
+async def add_lovelace_panel_tool(
+    panel: Dict[str, Any],
+    url_path: Optional[str] = None,
+    position: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Insert a new Lovelace panel (view) at the specified position.
+    """
+    logger.info("Adding Lovelace panel to %s at position %s", url_path, position)
+    result = await add_lovelace_panel(panel=panel, url_path=url_path, position=position)
+    error = _extract_error_response(result)
+    if error:
+        return error
+    return result
+
+@mcp.tool()
+@async_handler("delete_lovelace_panel")
+async def delete_lovelace_panel_tool(
+    panel_id: Union[str, int],
+    url_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Remove a panel (view) from a Lovelace dashboard.
+    """
+    logger.info("Deleting Lovelace panel %s from %s", panel_id, url_path)
+    result = await delete_lovelace_panel(panel_id=panel_id, url_path=url_path)
+    error = _extract_error_response(result)
+    if error:
+        return error
+    return result
 
 @mcp.tool()
 @async_handler("get_lovelace_config")

@@ -76,6 +76,11 @@ class TestMCPServer:
             "create_lovelace_dashboard_tool",
             "update_lovelace_dashboard_tool",
             "delete_lovelace_dashboard_tool",
+            "list_lovelace_panels_tool",
+            "get_lovelace_panel_tool",
+            "update_lovelace_panel_view_tool",
+            "add_lovelace_panel_tool",
+            "delete_lovelace_panel_tool",
             "get_lovelace_config_tool",
             "delete_lovelace_config_tool",
             "validate_lovelace_config_tool",
@@ -242,6 +247,11 @@ class TestMCPServer:
             create_lovelace_dashboard_tool,
             update_lovelace_dashboard_tool,
             delete_lovelace_dashboard_tool,
+            list_lovelace_panels_tool,
+            get_lovelace_panel_tool,
+            update_lovelace_panel_view_tool,
+            add_lovelace_panel_tool,
+            delete_lovelace_panel_tool,
             get_lovelace_config_tool,
             delete_lovelace_config_tool,
             validate_lovelace_config_tool,
@@ -249,12 +259,16 @@ class TestMCPServer:
 
         dashboards = [{"id": "abc", "title": "Main"}]
 
-        with patch("app.server.list_lovelace_dashboards", AsyncMock(return_value=dashboards)) as mock_list:
+        with patch("app.server.list_lovelace_dashboards", AsyncMock(return_value=dashboards)) as mock_list, \
+             patch("app.server.list_lovelace_panels", AsyncMock(return_value={"count": 1, "panels": [{"index": 0, "title": "Panel"}]})) as mock_panels:
             result = await list_lovelace_dashboards_tool()
 
         mock_list.assert_awaited_once()
+        mock_panels.assert_awaited_once_with(url_path=None)
         assert result["count"] == 1
         assert result["dashboards"][0]["id"] == "abc"
+        assert result["dashboards"][0]["panel_count"] == 1
+        assert result["dashboards"][0]["panels"][0]["title"] == "Panel"
 
         with patch("app.server.create_lovelace_dashboard", AsyncMock(return_value={"id": "abc"})) as mock_create:
             created = await create_lovelace_dashboard_tool(
@@ -299,6 +313,36 @@ class TestMCPServer:
 
         mock_delete.assert_awaited_once_with(dashboard_id="abc")
         assert deleted == {}
+
+        with patch("app.server.list_lovelace_panels", AsyncMock(return_value={"count": 1, "panels": []})) as mock_panel_list:
+            panels = await list_lovelace_panels_tool(url_path="wall")
+
+        mock_panel_list.assert_awaited_once_with(url_path="wall")
+        assert panels["count"] == 1
+
+        with patch("app.server.get_lovelace_panel", AsyncMock(return_value={"panel_index": 0})) as mock_get_panel:
+            panel = await get_lovelace_panel_tool("charts", url_path="wall")
+
+        mock_get_panel.assert_awaited_once_with(panel_id="charts", url_path="wall")
+        assert panel["panel_index"] == 0
+
+        with patch("app.server.update_lovelace_panel_view", AsyncMock(return_value={"status": "updated"})) as mock_update_panel:
+            panel_update = await update_lovelace_panel_view_tool("charts", {"title": "Charts"}, url_path="wall")
+
+        mock_update_panel.assert_awaited_once_with(panel_id="charts", panel={"title": "Charts"}, url_path="wall")
+        assert panel_update["status"] == "updated"
+
+        with patch("app.server.add_lovelace_panel", AsyncMock(return_value={"status": "added"})) as mock_add_panel:
+            panel_add = await add_lovelace_panel_tool({"title": "New"}, url_path="wall", position=2)
+
+        mock_add_panel.assert_awaited_once_with(panel={"title": "New"}, url_path="wall", position=2)
+        assert panel_add["status"] == "added"
+
+        with patch("app.server.delete_lovelace_panel", AsyncMock(return_value={"status": "deleted"})) as mock_del_panel:
+            panel_del = await delete_lovelace_panel_tool("charts", url_path="wall")
+
+        mock_del_panel.assert_awaited_once_with(panel_id="charts", url_path="wall")
+        assert panel_del["status"] == "deleted"
 
         config_payload = {"config": {"views": []}}
         with patch("app.server.get_lovelace_config", AsyncMock(return_value=config_payload)) as mock_get:

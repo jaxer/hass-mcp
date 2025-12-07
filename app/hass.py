@@ -1206,9 +1206,11 @@ async def save_lovelace_config(
     else:
         return {"error": "config must be a string or object"}
 
+    normalized_path = _normalize_dashboard_path(url_path)
+
     payload: Dict[str, Any] = {"config": config_payload}
-    if url_path is not None:
-        payload["url_path"] = url_path
+    if normalized_path is not None:
+        payload["url_path"] = normalized_path
 
     result = await _call_ws_command("lovelace/config/save", payload)
 
@@ -1226,9 +1228,11 @@ async def get_lovelace_config(
     """
     Fetch a Lovelace dashboard configuration.
     """
+    normalized_path = _normalize_dashboard_path(url_path)
+
     payload: Dict[str, Any] = {"force": force}
-    if url_path is not None:
-        payload["url_path"] = url_path
+    if normalized_path is not None:
+        payload["url_path"] = normalized_path
 
     result = await _call_ws_command("lovelace/config", payload)
     return {
@@ -1242,9 +1246,11 @@ async def delete_lovelace_config(url_path: Optional[str] = None) -> Dict[str, An
     """
     Delete a Lovelace dashboard configuration (storage dashboards only).
     """
+    normalized_path = _normalize_dashboard_path(url_path)
+
     payload: Dict[str, Any] = {}
-    if url_path is not None:
-        payload["url_path"] = url_path
+    if normalized_path is not None:
+        payload["url_path"] = normalized_path
 
     result = await _call_ws_command("lovelace/config/delete", payload)
     return {
@@ -1270,7 +1276,27 @@ async def list_lovelace_dashboards() -> List[Dict[str, Any]]:
     List all Lovelace dashboards registered in Home Assistant.
     """
     result = await _call_ws_command("lovelace/dashboards/list")
-    return cast(List[Dict[str, Any]], result)
+    dashboards = cast(List[Dict[str, Any]], result) or []
+
+    has_default = any(
+        d.get("id") == "lovelace_default"
+        or d.get("url_path") == "lovelace"
+        for d in dashboards
+    )
+
+    if not has_default:
+        default_entry = {
+            "id": "lovelace_default",
+            "title": "Home",
+            "mode": "storage",
+            "require_admin": False,
+            "show_in_sidebar": True,
+            "url_path": "lovelace",
+            "icon": "mdi:view-dashboard",
+        }
+        dashboards = dashboards + [default_entry]
+
+    return dashboards
 
 @handle_api_errors
 async def create_lovelace_dashboard(
@@ -1349,3 +1375,183 @@ async def delete_lovelace_dashboard(dashboard_id: str) -> Dict[str, Any]:
         {"dashboard_id": dashboard_id},
     )
     return cast(Dict[str, Any], result)
+
+def _resolve_panel_index(views: List[Dict[str, Any]], panel_id: Union[str, int]) -> Optional[int]:
+    """Return the index for a panel based on numeric index or view path/title."""
+    if isinstance(panel_id, int):
+        return panel_id if 0 <= panel_id < len(views) else None
+
+    candidate = str(panel_id).strip().lower()
+    if not candidate:
+        return None
+
+    for idx, view in enumerate(views):
+        path = str(view.get("path", "")).strip().lower()
+        title = str(view.get("title", "")).strip().lower()
+        if candidate in {path, title} and candidate:
+            return idx
+
+    return None
+
+def _normalize_dashboard_path(url_path: Optional[str]) -> Optional[str]:
+    if url_path is None:
+        return None
+    cleaned = url_path.strip()
+    if not cleaned:
+        return None
+    if cleaned.lower() in {"lovelace", "default", "home"}:
+        return None
+    return cleaned
+
+@handle_api_errors
+async def list_lovelace_panels(url_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Return lightweight metadata for all panels (views) in a Lovelace dashboard.
+    """
+    config_result = await get_lovelace_config(url_path=url_path)
+    if "error" in config_result:
+        return config_result
+
+    views = config_result.get("config", {}).get("views", []) or []
+    panels = []
+    for idx, view in enumerate(views):
+        panels.append(
+            {
+                "index": idx,
+                "title": view.get("title"),
+                "path": view.get("path"),
+                "badges": len(view.get("badges", []) or []),
+                "cards": len(view.get("cards", []) or []),
+            }
+        )
+
+    return {
+        "url_path": url_path,
+        "count": len(panels),
+        "panels": panels,
+    }
+
+@handle_api_errors
+async def get_lovelace_panel(
+    panel_id: Union[str, int],
+    *,
+    url_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Retrieve a single Lovelace panel (view) definition.
+    """
+    config_result = await get_lovelace_config(url_path=url_path)
+    if "error" in config_result:
+        return config_result
+
+    config = config_result.get("config", {}) or {}
+    views = config.get("views", []) or []
+    idx = _resolve_panel_index(views, panel_id)
+    if idx is None or idx >= len(views):
+        return {"error": "Panel not found", "panel_id": panel_id}
+
+    return {
+        "url_path": url_path,
+        "panel_index": idx,
+        "panel": views[idx],
+    }
+
+@handle_api_errors
+async def update_lovelace_panel_view(
+    panel_id: Union[str, int],
+    panel: Dict[str, Any],
+    *,
+    url_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Replace a single Lovelace panel with the provided definition.
+    """
+    if not isinstance(panel, dict) or not panel:
+        return {"error": "panel must be a non-empty object"}
+
+    config_result = await get_lovelace_config(url_path=url_path)
+    if "error" in config_result:
+        return config_result
+
+    config = config_result.get("config", {}) or {}
+    views = config.setdefault("views", [])
+    idx = _resolve_panel_index(views, panel_id)
+    if idx is None or idx >= len(views):
+        return {"error": "Panel not found", "panel_id": panel_id}
+
+    views[idx] = panel
+    save_result = await save_lovelace_config(config, url_path=url_path)
+    if isinstance(save_result, dict) and "error" in save_result:
+        return save_result
+
+    return {
+        "url_path": url_path,
+        "panel_index": idx,
+        "panel": panel,
+        "status": "updated",
+    }
+
+@handle_api_errors
+async def add_lovelace_panel(
+    panel: Dict[str, Any],
+    *,
+    url_path: Optional[str] = None,
+    position: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Insert a new panel into the Lovelace dashboard at the given position.
+    """
+    if not isinstance(panel, dict) or not panel:
+        return {"error": "panel must be a non-empty object"}
+
+    config_result = await get_lovelace_config(url_path=url_path)
+    if "error" in config_result:
+        return config_result
+
+    config = config_result.get("config", {}) or {}
+    views = config.setdefault("views", [])
+
+    insert_at = len(views) if position is None else max(0, min(position, len(views)))
+    views.insert(insert_at, panel)
+
+    save_result = await save_lovelace_config(config, url_path=url_path)
+    if isinstance(save_result, dict) and "error" in save_result:
+        return save_result
+
+    return {
+        "url_path": url_path,
+        "panel_index": insert_at,
+        "panel": panel,
+        "status": "added",
+    }
+
+@handle_api_errors
+async def delete_lovelace_panel(
+    panel_id: Union[str, int],
+    *,
+    url_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Remove a specific panel from the Lovelace dashboard.
+    """
+    config_result = await get_lovelace_config(url_path=url_path)
+    if "error" in config_result:
+        return config_result
+
+    config = config_result.get("config", {}) or {}
+    views = config.setdefault("views", [])
+    idx = _resolve_panel_index(views, panel_id)
+    if idx is None or idx >= len(views):
+        return {"error": "Panel not found", "panel_id": panel_id}
+
+    removed = views.pop(idx)
+    save_result = await save_lovelace_config(config, url_path=url_path)
+    if isinstance(save_result, dict) and "error" in save_result:
+        return save_result
+
+    return {
+        "url_path": url_path,
+        "panel_index": idx,
+        "panel": removed,
+        "status": "deleted",
+    }

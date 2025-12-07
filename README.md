@@ -187,6 +187,11 @@ Hass-MCP provides several tools for interacting with Home Assistant:
 - `update_lovelace_dashboard`: Adjust dashboard metadata such as title, icon, sidebar visibility, or admin requirement
 - `delete_lovelace_dashboard`: Remove a storage-backed dashboard by id
 - `get_lovelace_config`: Download the current dashboard JSON/YAML (optionally forcing a reload to bypass caches)
+- `list_lovelace_panels`: Return lightweight metadata for each panel/view so you can target small updates
+- `get_lovelace_panel`: Fetch a single panel (view) definition without transferring the entire dashboard
+- `add_lovelace_panel`: Insert a new panel at a specific position while leaving the rest of the dashboard untouched
+- `update_lovelace_panel_view`: Replace one panel with a new definition (ideal for incremental edits)
+- `delete_lovelace_panel`: Remove a single panel/view while keeping the rest of the dashboard intact
 - `update_lovelace_panel`: Push an updated Lovelace dashboard/panel configuration (JSON/YAML) to Home Assistant
 - `delete_lovelace_config`: Clear the stored Lovelace configuration for a dashboard
 - `validate_lovelace_config`: Force reload a dashboard to surface YAML/JSON errors

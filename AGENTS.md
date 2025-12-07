@@ -82,11 +82,15 @@ Following this flow ensures MCP changes work through the same path the user will
 - **Home Assistant token:** stored in `codex-config.toml`; never echo it in logs or responses.
 
 ## Lovelace Panel Management
+- **Only** interact with dashboards/panels/Lovelace via the MCP tools—never edit `.storage/lovelace*` or related files manually.
 - Use `list_lovelace_dashboards` for an overview of available dashboards (YAML + storage). The storage dashboards include an `id` field needed for update/delete calls.
 - `create_lovelace_dashboard` lets you provision new storage dashboards (title/icon/sidebar visibility/admin requirement). Set `allow_single_word=true` if you need a url path without a hyphen.
 - `update_lovelace_dashboard` changes metadata (title/icon/sidebar/admin) and `delete_lovelace_dashboard` removes unused dashboards.
-- `get_lovelace_config` downloads the dashboard JSON (set `force=true` to bypass caches). Use `update_lovelace_panel` to push new configs—payloads can be dicts or YAML/JSON strings; include `url_path` for non-default dashboards.
-- `delete_lovelace_config` clears a storage dashboard's saved layout while keeping the dashboard entry; `validate_lovelace_config` forces a reload so YAML errors surface immediately.
+- Prefer the panel-scoped tools to keep payloads tiny:
+  - `list_lovelace_panels` / `get_lovelace_panel` return lightweight metadata or a single view definition.
+  - `add_lovelace_panel`, `update_lovelace_panel_view`, and `delete_lovelace_panel` mutate just one view, so you avoid pushing the entire dashboard for small edits.
+- Use `get_lovelace_config` only when you truly need the whole dashboard JSON (and pass `force=true` to bypass caches). `update_lovelace_panel` remains available for full-config pushes if required.
+- `delete_lovelace_config` clears a storage dashboard's saved layout while keeping the dashboard entry; `validate_lovelace_config` forces a reload so YAML/JSON errors surface immediately.
 - Validation happens inside Home Assistant, so bubble up the returned error dict if any Lovelace command fails.
 
 ## When Implementing New Tools

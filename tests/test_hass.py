@@ -3,6 +3,7 @@ import asyncio
 from unittest.mock import MagicMock, patch, AsyncMock, ANY
 import json
 import httpx
+import copy
 from typing import Dict, List, Any
 
 from app.hass import (
@@ -12,7 +13,8 @@ from app.hass import (
     get_automation_trace, save_lovelace_config, get_lovelace_config,
     delete_lovelace_config, validate_lovelace_config, list_lovelace_dashboards,
     create_lovelace_dashboard, update_lovelace_dashboard,
-    delete_lovelace_dashboard
+    delete_lovelace_dashboard, list_lovelace_panels, get_lovelace_panel,
+    update_lovelace_panel_view, add_lovelace_panel, delete_lovelace_panel
 )
 
 class TestHassAPI:
@@ -456,7 +458,8 @@ class TestHassAPI:
                     dashboards = await list_lovelace_dashboards()
 
         ws_mock.assert_awaited_once_with("lovelace/dashboards/list")
-        assert dashboards == [{"id": "abc"}]
+        assert dashboards[0]["id"] == "abc"
+        assert any(d.get("id") == "lovelace_default" for d in dashboards)
 
         ws_mock = AsyncMock(return_value={"id": "abc"})
         with patch('app.hass._call_ws_command', ws_mock):
@@ -522,6 +525,68 @@ class TestHassAPI:
             {"dashboard_id": "abc"},
         )
         assert deleted == {}
+
+    @pytest.mark.asyncio
+    async def test_lovelace_panel_helpers(self, mock_config):
+        """Panel-level helpers should work off partial data to limit payload sizes."""
+        views = [
+            {"title": "Charts", "path": "charts", "cards": [{"type": "grid"}]},
+            {"title": "HVAC", "path": "hvac", "cards": []},
+        ]
+        base_config = {"config": {"views": views}}
+
+        def fresh_config():
+            return copy.deepcopy(base_config)
+        with patch('app.hass.HA_TOKEN', mock_config["hass_token"]), \
+             patch('app.hass.HA_URL', mock_config["hass_url"]):
+            with patch('app.hass.get_lovelace_config', AsyncMock(return_value=fresh_config())) as mock_get:
+                result = await list_lovelace_panels(url_path="uponor")
+
+            mock_get.assert_awaited_once_with(url_path="uponor")
+            assert result["count"] == 2
+            assert result["panels"][0]["title"] == "Charts"
+
+            with patch('app.hass._call_ws_command', AsyncMock(return_value=fresh_config()["config"])) as ws_mock:
+                default_panels = await list_lovelace_panels(url_path="lovelace")
+
+            ws_mock.assert_awaited_once_with("lovelace/config", {"force": False})
+            assert default_panels["count"] == 2
+
+            with patch('app.hass.get_lovelace_config', AsyncMock(return_value=fresh_config())) as mock_get:
+                panel = await get_lovelace_panel("charts", url_path="uponor")
+
+            mock_get.assert_awaited_once_with(url_path="uponor")
+            assert panel["panel_index"] == 0
+            assert panel["panel"]["title"] == "Charts"
+
+            updated_panel = {"title": "Charts v2", "path": "charts", "cards": []}
+            with patch('app.hass.get_lovelace_config', AsyncMock(return_value=fresh_config())) as mock_get, \
+                 patch('app.hass.save_lovelace_config', AsyncMock(return_value={"status": "saved"})) as mock_save:
+                update_result = await update_lovelace_panel_view("charts", updated_panel, url_path="uponor")
+
+            mock_get.assert_awaited_once_with(url_path="uponor")
+            mock_save.assert_awaited_once()
+            assert update_result["status"] == "updated"
+            assert update_result["panel"]["title"] == "Charts v2"
+
+            new_panel = {"title": "Energy", "path": "energy", "cards": []}
+            with patch('app.hass.get_lovelace_config', AsyncMock(return_value=fresh_config())) as mock_get, \
+                 patch('app.hass.save_lovelace_config', AsyncMock(return_value={"status": "saved"})) as mock_save:
+                add_result = await add_lovelace_panel(new_panel, url_path="uponor", position=1)
+
+            mock_get.assert_awaited_once_with(url_path="uponor")
+            mock_save.assert_awaited_once()
+            assert add_result["panel_index"] == 1
+            assert add_result["status"] == "added"
+
+            with patch('app.hass.get_lovelace_config', AsyncMock(return_value=fresh_config())) as mock_get, \
+                 patch('app.hass.save_lovelace_config', AsyncMock(return_value={"status": "saved"})) as mock_save:
+                delete_result = await delete_lovelace_panel("hvac", url_path="uponor")
+
+            mock_get.assert_awaited_once_with(url_path="uponor")
+            mock_save.assert_awaited_once()
+            assert delete_result["status"] == "deleted"
+            assert delete_result["panel_index"] == 1
 
     @pytest.mark.asyncio
     async def test_list_automation_traces(self, mock_config):
