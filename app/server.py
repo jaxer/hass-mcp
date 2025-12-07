@@ -66,6 +66,14 @@ from app.hass import (
     update_label,
     delete_label,
     update_entity_labels,
+    save_lovelace_config,
+    get_lovelace_config,
+    delete_lovelace_config,
+    validate_lovelace_config,
+    list_lovelace_dashboards,
+    create_lovelace_dashboard,
+    update_lovelace_dashboard,
+    delete_lovelace_dashboard,
     list_automation_traces as ha_list_automation_traces,
     get_automation_trace as ha_get_automation_trace,
 )
@@ -1075,6 +1083,137 @@ async def set_entity_labels(entity_id: str, labels: List[str]) -> Dict[str, Any]
     """
     logger.info(f"Setting labels for {entity_id}: {labels}")
     return await update_entity_labels(entity_id=entity_id, labels=labels)
+
+@mcp.tool()
+@async_handler("list_lovelace_dashboards")
+async def list_lovelace_dashboards_tool() -> Dict[str, Any]:
+    """
+    List Lovelace dashboards (YAML + storage) with metadata.
+    """
+    logger.info("Listing Lovelace dashboards")
+    dashboards = await list_lovelace_dashboards()
+
+    error = _extract_error_response(dashboards)
+    if error:
+        return error
+
+    return _format_list_response(dashboards, key="dashboards")
+
+@mcp.tool()
+@async_handler("create_lovelace_dashboard")
+async def create_lovelace_dashboard_tool(
+    url_path: str,
+    title: str,
+    icon: Optional[str] = None,
+    require_admin: bool = False,
+    show_in_sidebar: bool = True,
+    allow_single_word: bool = False,
+) -> Dict[str, Any]:
+    """
+    Create a new storage Lovelace dashboard entry.
+    """
+    logger.info("Creating Lovelace dashboard %s", url_path)
+    return await create_lovelace_dashboard(
+        url_path=url_path,
+        title=title,
+        icon=icon,
+        require_admin=require_admin,
+        show_in_sidebar=show_in_sidebar,
+        allow_single_word=allow_single_word,
+    )
+
+@mcp.tool()
+@async_handler("update_lovelace_dashboard")
+async def update_lovelace_dashboard_tool(
+    dashboard_id: str,
+    title: Optional[str] = None,
+    icon: Optional[str] = None,
+    require_admin: Optional[bool] = None,
+    show_in_sidebar: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """
+    Update Lovelace dashboard metadata (title, icon, sidebar visibility, admin requirement).
+    """
+    logger.info("Updating Lovelace dashboard %s", dashboard_id)
+    return await update_lovelace_dashboard(
+        dashboard_id=dashboard_id,
+        title=title,
+        icon=icon,
+        require_admin=require_admin,
+        show_in_sidebar=show_in_sidebar,
+    )
+
+@mcp.tool()
+@async_handler("delete_lovelace_dashboard")
+async def delete_lovelace_dashboard_tool(dashboard_id: str) -> Dict[str, Any]:
+    """
+    Delete a storage Lovelace dashboard by id.
+    """
+    logger.info("Deleting Lovelace dashboard %s", dashboard_id)
+    return await delete_lovelace_dashboard(dashboard_id=dashboard_id)
+
+@mcp.tool()
+@async_handler("get_lovelace_config")
+async def get_lovelace_config_tool(
+    url_path: Optional[str] = None,
+    force: bool = False
+) -> Dict[str, Any]:
+    """
+    Fetch the Lovelace configuration for a dashboard (set force=True to bypass cache).
+    """
+    logger.info("Fetching Lovelace config (url_path=%s, force=%s)", url_path, force)
+    result = await get_lovelace_config(url_path=url_path, force=force)
+    error = _extract_error_response(result)
+    if error:
+        return error
+    return result
+
+@mcp.tool()
+@async_handler("delete_lovelace_config")
+async def delete_lovelace_config_tool(url_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Delete the stored Lovelace configuration (storage dashboards only).
+    """
+    logger.info("Deleting Lovelace config for url_path=%s", url_path)
+    return await delete_lovelace_config(url_path=url_path)
+
+@mcp.tool()
+@async_handler("validate_lovelace_config")
+async def validate_lovelace_config_tool(url_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Force reload a Lovelace dashboard to surface YAML/JSON errors.
+    """
+    logger.info("Validating Lovelace config for url_path=%s", url_path)
+    result = await validate_lovelace_config(url_path=url_path)
+    error = _extract_error_response(result)
+    if error:
+        return error
+    return result
+
+@mcp.tool()
+@async_handler("update_lovelace_panel")
+async def update_lovelace_panel(
+    config: Dict[str, Any],
+    url_path: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Update a Lovelace dashboard/panel definition via Home Assistant's websocket API.
+
+    Args:
+        config: The Lovelace configuration payload (views, cards, theme, etc.)
+        url_path: Optional dashboard path (omit for the default "lovelace" dashboard)
+
+    Returns:
+        Status dictionary from Home Assistant or an error description.
+    """
+    logger.info("Saving Lovelace config for url_path=%s", url_path)
+    result = await save_lovelace_config(config=config, url_path=url_path)
+
+    error = _extract_error_response(result)
+    if error:
+        return error
+
+    return result
 
 @mcp.tool()
 @async_handler("restart_ha")

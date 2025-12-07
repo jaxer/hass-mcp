@@ -9,7 +9,10 @@ from app.hass import (
     get_entity_state, call_service, get_entities, get_automations, handle_api_errors,
     list_labels, create_label, update_label, delete_label, update_entity_labels,
     reload_home_assistant, check_home_assistant_config, list_automation_traces,
-    get_automation_trace
+    get_automation_trace, save_lovelace_config, get_lovelace_config,
+    delete_lovelace_config, validate_lovelace_config, list_lovelace_dashboards,
+    create_lovelace_dashboard, update_lovelace_dashboard,
+    delete_lovelace_dashboard
 )
 
 class TestHassAPI:
@@ -388,6 +391,137 @@ class TestHassAPI:
                         "config/entity_registry/update",
                         {"entity_id": "automation.test", "labels": ["abc"]}
                     )
+
+    @pytest.mark.asyncio
+    async def test_save_lovelace_config(self, mock_config):
+        """Saving Lovelace config should validate payloads and call the websocket helper."""
+        config_payload = {"views": []}
+        ws_mock = AsyncMock(return_value=None)
+
+        with patch('app.hass._call_ws_command', ws_mock):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    result = await save_lovelace_config(config_payload, url_path="wall")
+                    assert result["status"] == "saved"
+                    assert result["url_path"] == "wall"
+                    ws_mock.assert_awaited_once_with(
+                        "lovelace/config/save",
+                        {"config": config_payload, "url_path": "wall"}
+                    )
+
+        empty_dict = await save_lovelace_config({})
+        assert "error" in empty_dict
+
+        empty_string = await save_lovelace_config("   ")
+        assert "error" in empty_string
+
+    @pytest.mark.asyncio
+    async def test_get_delete_validate_lovelace_config(self, mock_config):
+        """Ensure Lovelace config helpers call the proper websocket commands."""
+        ws_mock = AsyncMock(return_value={"views": []})
+
+        with patch('app.hass._call_ws_command', ws_mock):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    result = await get_lovelace_config(url_path="wall", force=True)
+
+        ws_mock.assert_awaited_once_with("lovelace/config", {"force": True, "url_path": "wall"})
+        assert result["config"] == {"views": []}
+        ws_mock.reset_mock()
+
+        with patch('app.hass._call_ws_command', ws_mock):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    result = await delete_lovelace_config("wall")
+
+        ws_mock.assert_awaited_once_with("lovelace/config/delete", {"url_path": "wall"})
+        assert result["status"] == "deleted"
+
+        with patch('app.hass.get_lovelace_config', AsyncMock(return_value={"config": {"views": []}})) as mock_get:
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    validated = await validate_lovelace_config("wall")
+
+        mock_get.assert_awaited_once_with(url_path="wall", force=True)
+        assert validated["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_lovelace_dashboard_registry_helpers(self, mock_config):
+        """Ensure dashboard CRUD helpers hit the websocket API with correct payloads."""
+        ws_mock = AsyncMock(return_value=[{"id": "abc"}])
+
+        with patch('app.hass._call_ws_command', ws_mock):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    dashboards = await list_lovelace_dashboards()
+
+        ws_mock.assert_awaited_once_with("lovelace/dashboards/list")
+        assert dashboards == [{"id": "abc"}]
+
+        ws_mock = AsyncMock(return_value={"id": "abc"})
+        with patch('app.hass._call_ws_command', ws_mock):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    created = await create_lovelace_dashboard(
+                        "wall-panel",
+                        "Wall Panel",
+                        icon="mdi:tablet",
+                        require_admin=True,
+                        show_in_sidebar=False,
+                        allow_single_word=True,
+                    )
+
+        ws_mock.assert_awaited_once_with(
+            "lovelace/dashboards/create",
+            {
+                "url_path": "wall-panel",
+                "title": "Wall Panel",
+                "icon": "mdi:tablet",
+                "require_admin": True,
+                "show_in_sidebar": False,
+                "allow_single_word": True,
+            },
+        )
+        assert created == {"id": "abc"}
+
+        ws_mock = AsyncMock(return_value={"id": "abc", "title": "New"})
+        with patch('app.hass._call_ws_command', ws_mock):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    updated = await update_lovelace_dashboard(
+                        "abc",
+                        title="New",
+                        icon="mdi:new",
+                        require_admin=False,
+                        show_in_sidebar=True,
+                    )
+
+        ws_mock.assert_awaited_once_with(
+            "lovelace/dashboards/update",
+            {
+                "dashboard_id": "abc",
+                "title": "New",
+                "icon": "mdi:new",
+                "require_admin": False,
+                "show_in_sidebar": True,
+            },
+        )
+        assert updated["title"] == "New"
+
+        no_fields = await update_lovelace_dashboard("abc")
+        assert "error" in no_fields
+
+        ws_mock = AsyncMock(return_value={})
+        with patch('app.hass._call_ws_command', ws_mock):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    deleted = await delete_lovelace_dashboard("abc")
+
+        ws_mock.assert_awaited_once_with(
+            "lovelace/dashboards/delete",
+            {"dashboard_id": "abc"},
+        )
+        assert deleted == {}
 
     @pytest.mark.asyncio
     async def test_list_automation_traces(self, mock_config):

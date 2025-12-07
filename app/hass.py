@@ -1179,3 +1179,173 @@ async def update_entity_labels(entity_id: str, labels: List[str]) -> Dict[str, A
     payload = {"entity_id": entity_id, "labels": labels or []}
     result = await _call_ws_command("config/entity_registry/update", payload)
     return cast(Dict[str, Any], result)
+
+@handle_api_errors
+async def save_lovelace_config(
+    config: Union[str, Dict[str, Any]],
+    url_path: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Persist a Lovelace dashboard (panel) configuration via the websocket API.
+
+    Args:
+        config: The Lovelace configuration payload (dict or raw YAML/JSON string)
+        url_path: Optional dashboard url_path (defaults to the main Lovelace dashboard)
+
+    Returns:
+        A status dictionary describing the outcome or an error dict.
+    """
+    if isinstance(config, str):
+        if not config.strip():
+            return {"error": "config cannot be empty"}
+        config_payload: Union[str, Dict[str, Any]] = config
+    elif isinstance(config, dict):
+        if not config:
+            return {"error": "config dictionary cannot be empty"}
+        config_payload = config
+    else:
+        return {"error": "config must be a string or object"}
+
+    payload: Dict[str, Any] = {"config": config_payload}
+    if url_path is not None:
+        payload["url_path"] = url_path
+
+    result = await _call_ws_command("lovelace/config/save", payload)
+
+    return {
+        "status": "saved",
+        "url_path": url_path,
+        "result": result,
+    }
+
+@handle_api_errors
+async def get_lovelace_config(
+    url_path: Optional[str] = None,
+    force: bool = False
+) -> Dict[str, Any]:
+    """
+    Fetch a Lovelace dashboard configuration.
+    """
+    payload: Dict[str, Any] = {"force": force}
+    if url_path is not None:
+        payload["url_path"] = url_path
+
+    result = await _call_ws_command("lovelace/config", payload)
+    return {
+        "url_path": url_path,
+        "config": result,
+        "force_reload": force,
+    }
+
+@handle_api_errors
+async def delete_lovelace_config(url_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Delete a Lovelace dashboard configuration (storage dashboards only).
+    """
+    payload: Dict[str, Any] = {}
+    if url_path is not None:
+        payload["url_path"] = url_path
+
+    result = await _call_ws_command("lovelace/config/delete", payload)
+    return {
+        "status": "deleted",
+        "url_path": url_path,
+        "result": result,
+    }
+
+@handle_api_errors
+async def validate_lovelace_config(url_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Force reload a Lovelace config to surface YAML/JSON errors.
+    """
+    validation = await get_lovelace_config(url_path=url_path, force=True)
+    if "error" in validation:
+        return validation
+    validation["status"] = "ok"
+    return validation
+
+@handle_api_errors
+async def list_lovelace_dashboards() -> List[Dict[str, Any]]:
+    """
+    List all Lovelace dashboards registered in Home Assistant.
+    """
+    result = await _call_ws_command("lovelace/dashboards/list")
+    return cast(List[Dict[str, Any]], result)
+
+@handle_api_errors
+async def create_lovelace_dashboard(
+    url_path: str,
+    title: str,
+    *,
+    icon: Optional[str] = None,
+    require_admin: bool = False,
+    show_in_sidebar: bool = True,
+    allow_single_word: bool = False,
+) -> Dict[str, Any]:
+    """
+    Create a new Lovelace dashboard entry (storage-backed only).
+    """
+    if not url_path.strip():
+        return {"error": "url_path is required"}
+    if not title.strip():
+        return {"error": "title is required"}
+
+    payload: Dict[str, Any] = {
+        "url_path": url_path,
+        "title": title,
+        "require_admin": require_admin,
+        "show_in_sidebar": show_in_sidebar,
+    }
+    if icon:
+        payload["icon"] = icon
+    if allow_single_word:
+        payload["allow_single_word"] = True
+
+    result = await _call_ws_command("lovelace/dashboards/create", payload)
+    return cast(Dict[str, Any], result)
+
+@handle_api_errors
+async def update_lovelace_dashboard(
+    dashboard_id: str,
+    *,
+    title: Optional[str] = None,
+    icon: Optional[str] = None,
+    require_admin: Optional[bool] = None,
+    show_in_sidebar: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """
+    Update dashboard metadata such as title or sidebar visibility.
+    """
+    if not dashboard_id:
+        return {"error": "dashboard_id is required"}
+
+    update_fields: Dict[str, Any] = {}
+    if title is not None:
+        update_fields["title"] = title
+    if icon is not None:
+        update_fields["icon"] = icon
+    if require_admin is not None:
+        update_fields["require_admin"] = require_admin
+    if show_in_sidebar is not None:
+        update_fields["show_in_sidebar"] = show_in_sidebar
+
+    if not update_fields:
+        return {"error": "At least one field must be provided to update dashboard"}
+
+    payload = {"dashboard_id": dashboard_id, **update_fields}
+    result = await _call_ws_command("lovelace/dashboards/update", payload)
+    return cast(Dict[str, Any], result)
+
+@handle_api_errors
+async def delete_lovelace_dashboard(dashboard_id: str) -> Dict[str, Any]:
+    """
+    Remove a storage Lovelace dashboard by id.
+    """
+    if not dashboard_id:
+        return {"error": "dashboard_id is required"}
+
+    result = await _call_ws_command(
+        "lovelace/dashboards/delete",
+        {"dashboard_id": dashboard_id},
+    )
+    return cast(Dict[str, Any], result)

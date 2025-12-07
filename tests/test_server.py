@@ -72,6 +72,14 @@ class TestMCPServer:
             "update_label_tool",
             "delete_label_tool",
             "set_entity_labels",
+            "list_lovelace_dashboards_tool",
+            "create_lovelace_dashboard_tool",
+            "update_lovelace_dashboard_tool",
+            "delete_lovelace_dashboard_tool",
+            "get_lovelace_config_tool",
+            "delete_lovelace_config_tool",
+            "validate_lovelace_config_tool",
+            "update_lovelace_panel",
         ]
         
         # Check that each expected tool function exists
@@ -201,6 +209,115 @@ class TestMCPServer:
             error_result = await get_automation_trace("automation.morning", "1")
 
         assert error_result["error"] == "missing"
+
+    @pytest.mark.asyncio
+    async def test_update_lovelace_panel_tool(self):
+        """Lovelace updates should delegate to the hass helper and pass through results."""
+        from app.server import update_lovelace_panel
+
+        payload = {"views": []}
+
+        with patch(
+            "app.server.save_lovelace_config",
+            AsyncMock(return_value={"status": "saved"}),
+        ) as mock_save:
+            result = await update_lovelace_panel(payload, url_path="wall")
+
+        mock_save.assert_awaited_once_with(config=payload, url_path="wall")
+        assert result == {"status": "saved"}
+
+        with patch(
+            "app.server.save_lovelace_config",
+            AsyncMock(return_value={"error": "boom"}),
+        ):
+            error = await update_lovelace_panel(payload)
+
+        assert error == {"error": "boom"}
+
+    @pytest.mark.asyncio
+    async def test_lovelace_dashboard_management_tools(self):
+        """Dashboard management tools should proxy to the hass helpers with proper args."""
+        from app.server import (
+            list_lovelace_dashboards_tool,
+            create_lovelace_dashboard_tool,
+            update_lovelace_dashboard_tool,
+            delete_lovelace_dashboard_tool,
+            get_lovelace_config_tool,
+            delete_lovelace_config_tool,
+            validate_lovelace_config_tool,
+        )
+
+        dashboards = [{"id": "abc", "title": "Main"}]
+
+        with patch("app.server.list_lovelace_dashboards", AsyncMock(return_value=dashboards)) as mock_list:
+            result = await list_lovelace_dashboards_tool()
+
+        mock_list.assert_awaited_once()
+        assert result["count"] == 1
+        assert result["dashboards"][0]["id"] == "abc"
+
+        with patch("app.server.create_lovelace_dashboard", AsyncMock(return_value={"id": "abc"})) as mock_create:
+            created = await create_lovelace_dashboard_tool(
+                url_path="wall-panel",
+                title="Wall Panel",
+                icon="mdi:tablet",
+                require_admin=True,
+                show_in_sidebar=False,
+                allow_single_word=True,
+            )
+
+        mock_create.assert_awaited_once_with(
+            url_path="wall-panel",
+            title="Wall Panel",
+            icon="mdi:tablet",
+            require_admin=True,
+            show_in_sidebar=False,
+            allow_single_word=True,
+        )
+        assert created == {"id": "abc"}
+
+        with patch("app.server.update_lovelace_dashboard", AsyncMock(return_value={"id": "abc", "title": "Updated"})) as mock_update:
+            updated = await update_lovelace_dashboard_tool(
+                dashboard_id="abc",
+                title="Updated",
+                icon="mdi:new",
+                require_admin=False,
+                show_in_sidebar=True,
+            )
+
+        mock_update.assert_awaited_once_with(
+            dashboard_id="abc",
+            title="Updated",
+            icon="mdi:new",
+            require_admin=False,
+            show_in_sidebar=True,
+        )
+        assert updated["title"] == "Updated"
+
+        with patch("app.server.delete_lovelace_dashboard", AsyncMock(return_value={})) as mock_delete:
+            deleted = await delete_lovelace_dashboard_tool("abc")
+
+        mock_delete.assert_awaited_once_with(dashboard_id="abc")
+        assert deleted == {}
+
+        config_payload = {"config": {"views": []}}
+        with patch("app.server.get_lovelace_config", AsyncMock(return_value=config_payload)) as mock_get:
+            config = await get_lovelace_config_tool(url_path="wall", force=True)
+
+        mock_get.assert_awaited_once_with(url_path="wall", force=True)
+        assert config == config_payload
+
+        with patch("app.server.delete_lovelace_config", AsyncMock(return_value={"status": "deleted"})) as mock_del_cfg:
+            del_result = await delete_lovelace_config_tool(url_path="wall")
+
+        mock_del_cfg.assert_awaited_once_with(url_path="wall")
+        assert del_result["status"] == "deleted"
+
+        with patch("app.server.validate_lovelace_config", AsyncMock(return_value={"status": "ok"})) as mock_validate:
+            validation = await validate_lovelace_config_tool(url_path="wall")
+
+        mock_validate.assert_awaited_once_with(url_path="wall")
+        assert validation["status"] == "ok"
 
     @pytest.mark.asyncio
     async def test_call_service_tool_wraps_list_response(self):

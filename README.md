@@ -182,6 +182,14 @@ Hass-MCP provides several tools for interacting with Home Assistant:
 - `list_automation_traces`: Summarize recent automation runs and get available run IDs
 - `get_automation_trace`: Fetch the detailed trace graph for a specific automation run
 - `call_service_tool`: Call any Home Assistant service
+- `list_lovelace_dashboards`: Enumerate Lovelace dashboards (YAML + storage) and their metadata
+- `create_lovelace_dashboard`: Add a new storage-backed Lovelace dashboard (sidebar title, icon, visibility, admin requirement)
+- `update_lovelace_dashboard`: Adjust dashboard metadata such as title, icon, sidebar visibility, or admin requirement
+- `delete_lovelace_dashboard`: Remove a storage-backed dashboard by id
+- `get_lovelace_config`: Download the current dashboard JSON/YAML (optionally forcing a reload to bypass caches)
+- `update_lovelace_panel`: Push an updated Lovelace dashboard/panel configuration (JSON/YAML) to Home Assistant
+- `delete_lovelace_config`: Clear the stored Lovelace configuration for a dashboard
+- `validate_lovelace_config`: Force reload a dashboard to surface YAML/JSON errors
 - `reload_ha`: Run Home Assistant's configuration check and reload the core configuration without restarting
 - `restart_ha`: Restart Home Assistant
 - `get_history`: Get the state history of an entity
