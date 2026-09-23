@@ -10,9 +10,9 @@ This fork extends [voska/hass-mcp](https://github.com/voska/hass-mcp) so an agen
 - **Automation traces:** list an automation's recent runs and read a single trace step by step, so an agent can work out why an automation did or didn't fire.
 - **Labels and reload:** create, update, delete and assign labels over the websocket API, with list responses normalised, and `reload_ha`, which checks the configuration before it reloads it.
 - **Statistics and history ranges:** integrated from [@rmaher001](https://github.com/rmaher001)'s [voska/hass-mcp#30](https://github.com/voska/hass-mcp/pull/30).
-- **`AGENTS.md`** for coding agents working on this repo, and tests for every new tool.
+- **`AGENTS.md`** for coding agents working on this repo, and tests for the new tools.
 
-Offered upstream as [voska/hass-mcp#32](https://github.com/voska/hass-mcp/pull/32).
+Labels and reload were offered upstream as [voska/hass-mcp#32](https://github.com/voska/hass-mcp/pull/32).
 
 <a href="https://glama.ai/mcp/servers/@voska/hass-mcp">
   <img width="380" height="200" src="https://glama.ai/mcp/servers/@voska/hass-mcp/badge" alt="Hass-MCP MCP server" />
