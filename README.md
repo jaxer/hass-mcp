@@ -8,8 +8,8 @@ This fork extends [voska/hass-mcp](https://github.com/voska/hass-mcp) so an agen
 
 - **Dashboards (Lovelace):** list, read, create, update and delete dashboards, panels and views, plus a tool that validates a dashboard config before it is written.
 - **Automation traces:** list an automation's recent runs and read a single trace step by step, so an agent can work out why an automation did or didn't fire.
-- **Labels over the websocket API:** create, update, delete and assign labels, with list responses normalised.
-- **Statistics and history ranges, labels and `reload_ha`:** integrated from [@rmaher001](https://github.com/rmaher001)'s `fix-use-cache-parameter` branch, with docs and tests added here.
+- **Labels and reload:** create, update, delete and assign labels over the websocket API, with list responses normalised, and `reload_ha`, which checks the configuration before it reloads it.
+- **Statistics and history ranges:** integrated from [@rmaher001](https://github.com/rmaher001)'s [voska/hass-mcp#30](https://github.com/voska/hass-mcp/pull/30).
 - **`AGENTS.md`** for coding agents working on this repo, and tests for every new tool.
 
 Offered upstream as [voska/hass-mcp#32](https://github.com/voska/hass-mcp/pull/32).
