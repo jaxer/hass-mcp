@@ -2,6 +2,18 @@
 
 A Model Context Protocol (MCP) server for Home Assistant integration with Claude and other LLMs.
 
+## What this fork adds
+
+This fork extends [voska/hass-mcp](https://github.com/voska/hass-mcp) so an agent can maintain a Home Assistant setup, not only read it.
+
+- **Dashboards (Lovelace):** list, read, create, update and delete dashboards, panels and views, plus a tool that validates a dashboard config before it is written.
+- **Automation traces:** list an automation's recent runs and read a single trace step by step, so an agent can work out why an automation did or didn't fire.
+- **Labels over the websocket API:** create, update, delete and assign labels, with list responses normalised.
+- **Statistics and history ranges, labels and `reload_ha`:** integrated from [@rmaher001](https://github.com/rmaher001)'s `fix-use-cache-parameter` branch, with docs and tests added here.
+- **`AGENTS.md`** for coding agents working on this repo, and tests for every new tool.
+
+Offered upstream as [voska/hass-mcp#32](https://github.com/voska/hass-mcp/pull/32).
+
 <a href="https://glama.ai/mcp/servers/@voska/hass-mcp">
   <img width="380" height="200" src="https://glama.ai/mcp/servers/@voska/hass-mcp/badge" alt="Hass-MCP MCP server" />
 </a>
